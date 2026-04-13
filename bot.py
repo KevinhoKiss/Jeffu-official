@@ -10,6 +10,10 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# 🔴 CONFIG FIXA (sem painel)
+DONO_ID = 766709835701682208
+MOTIVO = "Divulgação de servidor"
+
 # ==================== EVENTO READY ====================
 @bot.event
 async def on_ready():
@@ -33,13 +37,6 @@ async def on_message(message):
 
     print(f"📨 {message.author}: {message.content}")
 
-    # 🔥 CARREGA CONFIG DO PAINEL
-    with open("config.json") as f:
-        config = json.load(f)
-
-    motivo = config["motivo_padrao"]
-    DONO_ID = config["dono_id"]
-
     # ==================== BLOQUEIO DE CONVITES ====================
     invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
@@ -53,7 +50,7 @@ async def on_message(message):
                 # 🔴 AVISA O USUÁRIO
                 try:
                     await message.author.send(
-                        f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {motivo}"
+                        f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {MOTIVO}"
                     )
                 except:
                     print("❌ Não consegui mandar DM para o usuário")
@@ -61,7 +58,10 @@ async def on_message(message):
                 await message.delete()
 
                 # 🔴 BAN
-                await message.guild.ban(message.author, reason=motivo)
+                await message.guild.ban(
+                    message.author,
+                    reason=MOTIVO
+                )
 
                 print(f"🚫 {message.author} banido")
 
@@ -73,7 +73,7 @@ async def on_message(message):
                         f"🚨 BANIMENTO\n\n"
                         f"👤 Usuário: {message.author}\n"
                         f"🆔 ID: {message.author.id}\n"
-                        f"📌 Motivo: {motivo}\n"
+                        f"📌 Motivo: {MOTIVO}\n"
                         f"💬 Mensagem: {message.content}\n"
                         f"🌐 Servidor: {message.guild.name}"
                     )
@@ -83,17 +83,17 @@ async def on_message(message):
                 return
 
         except Exception:
-            motivo = "Convite suspeito ou não verificado"
+            motivo_erro = "Convite suspeito ou não verificado"
 
             try:
                 await message.author.send(
-                    f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {motivo}"
+                    f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {motivo_erro}"
                 )
             except:
                 pass
 
             await message.delete()
-            await message.guild.ban(message.author, reason=motivo)
+            await message.guild.ban(message.author, reason=motivo_erro)
 
             dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
 
@@ -102,7 +102,7 @@ async def on_message(message):
                     f"🚨 BANIMENTO\n\n"
                     f"👤 Usuário: {message.author}\n"
                     f"🆔 ID: {message.author.id}\n"
-                    f"📌 Motivo: {motivo}\n"
+                    f"📌 Motivo: {motivo_erro}\n"
                     f"💬 Mensagem: {message.content}\n"
                     f"🌐 Servidor: {message.guild.name}"
                 )
@@ -115,7 +115,8 @@ async def on_message(message):
     texto = message.content.lower()
 
     palavras_chave = [
-        "login", "senha", "ticket"
+        "login", "senha", "esqueci",
+        "ajuda", "ticket", "suporte"
     ]
 
     if any(p in texto for p in palavras_chave):
