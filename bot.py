@@ -109,7 +109,7 @@ async def on_message(message):
     ]
 
     if any(p in texto for p in palavras_chave):
-        await message.channel.send(" O <#1479642544429076500> foi criado justamente para isso 1466793665463844894")
+        await message.channel.send(" O <#1479642544429076500> foi criado justamente para isso <:FBI:1466776866122629252>")
         print("✅ Resposta enviada")
     else:
         print("❌ Nenhuma palavra-chave encontrada")
