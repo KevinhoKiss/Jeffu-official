@@ -109,7 +109,8 @@ async def on_message(message):
     ]
 
     if any(p in texto for p in palavras_chave):
-        await message.reply(" O <#1479642544429076500> foi criado justamente para isso <:FBI:1466776866122629252>")
+        await message.reply(" O <#1479642544429076500> foi criado justamente para isso <:FBI:1466776866122629252>",
+    mention_author=False)
         print("✅ Resposta enviada")
     else:
         print("❌ Nenhuma palavra-chave encontrada")
