@@ -10,7 +10,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 🔴 CONFIG FIXA (sem painel)
+# 🔴 CONFIG FIXA
 DONO_ID = 766709835701682208
 MOTIVO = "Divulgação de servidor"
 
@@ -37,17 +37,19 @@ async def on_message(message):
 
     print(f"📨 {message.author}: {message.content}")
 
-    # ==================== BLOQUEIO DE CONVITES ====================
     invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
+    # ==================== BLOQUEIO DE CONVITES ====================
     if re.search(invite_pattern, message.content):
+        print("🚨 Convite detectado!")
+
         try:
             invite_link = re.search(invite_pattern, message.content).group(0)
             invite = await bot.fetch_invite(invite_link)
 
             if invite.guild.id != message.guild.id:
 
-                # 🔴 AVISA O USUÁRIO
+                # 🔴 DM pro usuário
                 try:
                     await message.author.send(
                         f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {MOTIVO}"
@@ -56,16 +58,11 @@ async def on_message(message):
                     print("❌ Não consegui mandar DM para o usuário")
 
                 await message.delete()
-
-                # 🔴 BAN
-                await message.guild.ban(
-                    message.author,
-                    reason=MOTIVO
-                )
+                await message.guild.ban(message.author, reason=MOTIVO)
 
                 print(f"🚫 {message.author} banido")
 
-                # 🔴 AVISA O DONO
+                # 🔴 DM pro dono
                 dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
 
                 try:
@@ -80,20 +77,13 @@ async def on_message(message):
                 except:
                     print("❌ Não consegui enviar DM para você")
 
-                return
+                return  # 🔥 PARA TUDO AQUI
 
         except Exception:
-            motivo_erro = "Convite suspeito ou não verificado"
-
-            try:
-                await message.author.send(
-                    f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {motivo_erro}"
-                )
-            except:
-                pass
+            print("⚠️ Erro ao verificar convite")
 
             await message.delete()
-            await message.guild.ban(message.author, reason=motivo_erro)
+            await message.guild.ban(message.author, reason="Convite suspeito")
 
             dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
 
@@ -102,21 +92,20 @@ async def on_message(message):
                     f"🚨 BANIMENTO\n\n"
                     f"👤 Usuário: {message.author}\n"
                     f"🆔 ID: {message.author.id}\n"
-                    f"📌 Motivo: {motivo_erro}\n"
+                    f"📌 Motivo: Convite suspeito\n"
                     f"💬 Mensagem: {message.content}\n"
                     f"🌐 Servidor: {message.guild.name}"
                 )
             except:
                 pass
 
-            return
+            return  # 🔥 PARA TUDO AQUI
 
     # ==================== RESPOSTA AUTOMÁTICA ====================
     texto = message.content.lower()
 
     palavras_chave = [
-        "login", "senha", "esqueci",
-        "ajuda", "ticket", "suporte"
+        "login", "senha", "ticket"
     ]
 
     if any(p in texto for p in palavras_chave):
