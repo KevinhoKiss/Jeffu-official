@@ -95,7 +95,7 @@ async def on_message(message):
 
     # ==================== RESPOSTA RÁPIDA (SENHA / SUPORTE) ====================
     palavras_chave = [
-        "login", "senha", "esqueci", "não consigo",
+        "login", "senha", "esqueci", "não consigo", "acesso",
         "nao consigo", "problema", "ajuda", "ticket", "suporte"
     ]
 
