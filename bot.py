@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 import traceback
 import re
+from openai import OpenAI
 
 # ==================== CONFIG ====================
 intents = discord.Intents.default()
@@ -13,6 +14,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 🔴 CONFIG FIXA
 DONO_ID = 766709835701682208
 MOTIVO = "Divulgação de servidor"
+
+# 🔑 IA (usa variável de ambiente)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ==================== EVENTO READY ====================
 @bot.event
@@ -37,9 +41,11 @@ async def on_message(message):
 
     print(f"📨 {message.author}: {message.content}")
 
-    invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
+    texto = message.content.lower()
 
     # ==================== BLOQUEIO DE CONVITES ====================
+    invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
+
     if re.search(invite_pattern, message.content):
         print("🚨 Convite detectado!")
 
@@ -49,7 +55,7 @@ async def on_message(message):
 
             if invite.guild.id != message.guild.id:
 
-                # 🔴 DM pro usuário
+                # DM usuário
                 try:
                     await message.author.send(
                         f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {MOTIVO}"
@@ -62,7 +68,7 @@ async def on_message(message):
 
                 print(f"🚫 {message.author} banido")
 
-                # 🔴 DM pro dono
+                # DM dono
                 dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
 
                 try:
@@ -77,7 +83,7 @@ async def on_message(message):
                 except:
                     print("❌ Não consegui enviar DM para você")
 
-                return  # 🔥 PARA TUDO AQUI
+                return
 
         except Exception:
             print("⚠️ Erro ao verificar convite")
@@ -85,35 +91,43 @@ async def on_message(message):
             await message.delete()
             await message.guild.ban(message.author, reason="Convite suspeito")
 
-            dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
+            return
 
-            try:
-                await dono.send(
-                    f"🚨 BANIMENTO\n\n"
-                    f"👤 Usuário: {message.author}\n"
-                    f"🆔 ID: {message.author.id}\n"
-                    f"📌 Motivo: Convite suspeito\n"
-                    f"💬 Mensagem: {message.content}\n"
-                    f"🌐 Servidor: {message.guild.name}"
-                )
-            except:
-                pass
-
-            return  # 🔥 PARA TUDO AQUI
-
-    # ==================== RESPOSTA AUTOMÁTICA ====================
-    texto = message.content.lower()
-
+    # ==================== RESPOSTA RÁPIDA (SENHA / SUPORTE) ====================
     palavras_chave = [
-        "login", "senha", "ticket"
+        "login", "senha", "esqueci", "não consigo",
+        "nao consigo", "problema", "ajuda", "ticket", "suporte"
     ]
 
     if any(p in texto for p in palavras_chave):
-        await message.reply(" O <#1479642544429076500> foi criado justamente para isso <:FBI:1466776866122629252>",
-    mention_author=False)
-        print("✅ Resposta enviada")
-    else:
-        print("❌ Nenhuma palavra-chave encontrada")
+        await message.reply(
+            "🔐 Para suporte, vá em <#1479642544429076500>",
+            mention_author=False
+        )
+        return
+
+    # ==================== IA (CHATGPT) ====================
+    try:
+        resposta = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Você é um bot de suporte de Discord. Responda de forma curta, clara e útil."
+                },
+                {
+                    "role": "user",
+                    "content": message.content
+                }
+            ]
+        )
+
+        texto_resposta = resposta.choices[0].message.content
+
+        await message.reply(texto_resposta, mention_author=False)
+
+    except Exception as e:
+        print("❌ Erro na IA:", e)
 
     await bot.process_commands(message)
 
