@@ -83,7 +83,7 @@ async def on_message(message):
     # ==================== SUPORTE ====================
     palavras_chave = [
         "login", "senha", "esqueci", "não consigo", "acesso",
-        "nao consigo", "problema", "ajuda", "ticket", "suporte"
+        "nao consigo", "ajuda", "ticket", "suporte"
     ]
 
     if any(p in texto for p in palavras_chave):
