@@ -15,22 +15,20 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 DONO_ID = 766709835701682208
 MOTIVO = "Divulgação de servidor"
 
-# 🔑 IA (usa variável de ambiente)
+# 🔑 IA
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ==================== EVENTO READY ====================
+# ==================== READY ====================
 @bot.event
 async def on_ready():
-    print(f'✅ Bot {bot.user} conectado com sucesso!')
-    
+    print(f'✅ Bot {bot.user} conectado!')
+
     try:
         await bot.change_presence(
             status=discord.Status.online,
             activity=discord.Game(name="Suporte - Tickets")
         )
-        print('✅ Status definido!')
     except Exception:
-        print('❌ Erro ao definir status:')
         traceback.print_exc()
 
 # ==================== MENSAGENS ====================
@@ -40,60 +38,49 @@ async def on_message(message):
         return
 
     print(f"📨 {message.author}: {message.content}")
-
     texto = message.content.lower()
 
     # ==================== BLOQUEIO DE CONVITES ====================
     invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
     if re.search(invite_pattern, message.content):
-        print("🚨 Convite detectado!")
-
         try:
             invite_link = re.search(invite_pattern, message.content).group(0)
             invite = await bot.fetch_invite(invite_link)
 
             if invite.guild.id != message.guild.id:
 
-                # DM usuário
                 try:
                     await message.author.send(
                         f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {MOTIVO}"
                     )
                 except:
-                    print("❌ Não consegui mandar DM para o usuário")
+                    pass
 
                 await message.delete()
                 await message.guild.ban(message.author, reason=MOTIVO)
 
-                print(f"🚫 {message.author} banido")
-
-                # DM dono
                 dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
 
                 try:
                     await dono.send(
                         f"🚨 BANIMENTO\n\n"
-                        f"👤 Usuário: {message.author}\n"
-                        f"🆔 ID: {message.author.id}\n"
+                        f"👤 {message.author} ({message.author.id})\n"
                         f"📌 Motivo: {MOTIVO}\n"
-                        f"💬 Mensagem: {message.content}\n"
-                        f"🌐 Servidor: {message.guild.name}"
+                        f"💬 {message.content}\n"
+                        f"🌐 {message.guild.name}"
                     )
                 except:
-                    print("❌ Não consegui enviar DM para você")
+                    pass
 
                 return
 
-        except Exception:
-            print("⚠️ Erro ao verificar convite")
-
+        except:
             await message.delete()
             await message.guild.ban(message.author, reason="Convite suspeito")
-
             return
 
-    # ==================== RESPOSTA RÁPIDA (SENHA / SUPORTE) ====================
+    # ==================== SUPORTE ====================
     palavras_chave = [
         "login", "senha", "esqueci", "não consigo", "acesso",
         "nao consigo", "problema", "ajuda", "ticket", "suporte"
@@ -105,13 +92,6 @@ async def on_message(message):
             mention_author=False
         )
         return
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    texto = message.content.lower()
 
     # ==================== QUEDA DO SITE ====================
     frases_site = [
@@ -132,39 +112,30 @@ async def on_message(message):
         )
         return
 
-    # ==================== IA (CHATGPT) ====================
+    # ==================== IA ====================
     try:
         resposta = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
-                {
-                    "role": "system",
-                    "content": "Você é um bot de suporte de Discord. Responda de forma curta, clara e útil."
-                },
-                {
-                    "role": "user",
-                    "content": message.content
-                }
+                {"role": "system", "content": "Você é um bot de suporte de Discord. Responda de forma curta, clara e útil."},
+                {"role": "user", "content": message.content}
             ]
         )
 
-        texto_resposta = resposta.choices[0].message.content
-
-        await message.reply(texto_resposta, mention_author=False)
+        await message.reply(
+            resposta.choices[0].message.content,
+            mention_author=False
+        )
 
     except Exception as e:
-        print("❌ Erro na IA:", e)
+        print("❌ Erro IA:", e)
 
     await bot.process_commands(message)
 
 # ==================== TOKEN ====================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-if not TOKEN:
-    print("❌ Token não encontrado!")
+if TOKEN:
+    bot.run(TOKEN)
 else:
-    try:
-        bot.run(TOKEN)
-    except Exception:
-        print("❌ Erro ao iniciar o bot:")
-        traceback.print_exc()
+    print("❌ Token não encontrado!")
