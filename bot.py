@@ -106,6 +106,21 @@ async def on_message(message):
         )
         return
 
+    # ==================== QUEDA DO SITE ====================
+palavras_site = [
+    "site caiu", "site fora", "site offline",
+    "o site caiu", "site não abre", "site nao abre",
+    "site caiu?", "site ta fora", "site tá fora",
+    "site não funciona", "site nao funciona",
+    "site bugado", "site com problema"
+]
+
+if any(p in texto for p in palavras_site):
+    await message.reply(
+        "🌐 Veja em <#1409296003034644542>",
+        mention_author=False
+    )
+    return
     # ==================== IA (CHATGPT) ====================
     try:
         resposta = client.chat.completions.create(
