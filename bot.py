@@ -16,8 +16,15 @@ ARQUIVO = "familias.json"
 AUTORIZADOS_FILE = "autorizados.json"
 
 DONO_ID = 766709835701682208
-CARGO_AUTORIZADO = 123456789012345678  # 🔥 COLOQUE O ID DO CARGO
 MOTIVO = "Divulgação de servidor"
+
+# ✅ CARGOS DOS CHEFES
+CARGOS_AUTORIZADOS = [
+    1464361173305655389,
+    1409338610854920374,
+    1409306638548209826,
+    1466216337339846828
+]
 
 # ================= BANCO =================
 def carregar():
@@ -56,6 +63,31 @@ def criar_embed(user, fam):
 
     return embed
 
+# ================= SELECT =================
+class ConvidarSelect(discord.ui.UserSelect):
+    def __init__(self, dono_id):
+        super().__init__(placeholder="Escolha um usuário...", min_values=1, max_values=1)
+        self.dono_id = dono_id
+
+    async def callback(self, interaction: discord.Interaction):
+        user = self.values[0]
+
+        data = carregar()
+        fam = data[self.dono_id]
+
+        if str(user.id) in fam["membros"]:
+            return await interaction.response.send_message("⚠️ Já está na família!", ephemeral=True)
+
+        fam["membros"].append(str(user.id))
+        salvar(data)
+
+        await interaction.response.send_message(f"✅ {user.mention} entrou na família!", ephemeral=True)
+
+class ConvidarView(discord.ui.View):
+    def __init__(self, dono_id):
+        super().__init__(timeout=60)
+        self.add_item(ConvidarSelect(dono_id))
+
 # ================= VIEW PRINCIPAL =================
 class FamiliaView(discord.ui.View):
     def __init__(self, dono_id):
@@ -78,8 +110,7 @@ class FamiliaView(discord.ui.View):
         msg = await bot.wait_for("message", check=check)
 
         data = carregar()
-        fam = data[self.dono_id]
-        fam["nome"] = msg.content
+        data[self.dono_id]["nome"] = msg.content
         salvar(data)
 
         await interaction.followup.send("✅ Nome atualizado!", ephemeral=True)
@@ -108,27 +139,6 @@ class FamiliaView(discord.ui.View):
 
         await interaction.response.send_message("🗑️ Família excluída!", ephemeral=True)
 
-# ================= VIEW CONVIDAR =================
-class ConvidarView(discord.ui.View):
-    def __init__(self, dono_id):
-        super().__init__(timeout=60)
-        self.dono_id = dono_id
-
-    @discord.ui.user_select(placeholder="Escolha um usuário...")
-    async def select(self, interaction, select):
-        user = select.values[0]
-
-        data = carregar()
-        fam = data[self.dono_id]
-
-        if str(user.id) in fam["membros"]:
-            return await interaction.response.send_message("Já está na família!", ephemeral=True)
-
-        fam["membros"].append(str(user.id))
-        salvar(data)
-
-        await interaction.response.send_message(f"✅ {user.mention} entrou!", ephemeral=True)
-
 # ================= COMANDO FAMÍLIA =================
 @bot.command()
 async def familia(ctx):
@@ -136,7 +146,7 @@ async def familia(ctx):
     autorizados = carregar_autorizados()
 
     if not (
-        any(role.id == CARGO_AUTORIZADO for role in ctx.author.roles)
+        any(role.id in CARGOS_AUTORIZADOS for role in ctx.author.roles)
         or ctx.author.guild_permissions.administrator
         or ctx.author.id == DONO_ID
         or ctx.author.id in autorizados
@@ -155,9 +165,7 @@ async def familia(ctx):
         }
         salvar(data)
 
-    fam = data[user_id]
-
-    embed = criar_embed(ctx.author, fam)
+    embed = criar_embed(ctx.author, data[user_id])
     view = FamiliaView(user_id)
 
     await ctx.reply(embed=embed, view=view, mention_author=False)
@@ -166,10 +174,7 @@ async def familia(ctx):
 @bot.tree.command(name="autorizar", description="Autorizar usuário")
 async def autorizar(interaction: discord.Interaction, user: discord.Member):
 
-    if not (
-        interaction.user.id == DONO_ID
-        or interaction.user.guild_permissions.administrator
-    ):
+    if not (interaction.user.id == DONO_ID or interaction.user.guild_permissions.administrator):
         return await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
 
     autorizados = carregar_autorizados()
@@ -182,14 +187,10 @@ async def autorizar(interaction: discord.Interaction, user: discord.Member):
 
     await interaction.response.send_message(f"✅ {user.mention} autorizado!", ephemeral=True)
 
-
 @bot.tree.command(name="remover_autorizacao", description="Remover autorização")
 async def remover_autorizacao(interaction: discord.Interaction, user: discord.Member):
 
-    if not (
-        interaction.user.id == DONO_ID
-        or interaction.user.guild_permissions.administrator
-    ):
+    if not (interaction.user.id == DONO_ID or interaction.user.guild_permissions.administrator):
         return await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
 
     autorizados = carregar_autorizados()
@@ -226,8 +227,11 @@ async def on_message(message):
 
     # BLOQUEIO DE CONVITES
     if re.search(r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)", message.content):
-        await message.delete()
-        await message.guild.ban(message.author, reason=MOTIVO)
+        try:
+            await message.delete()
+            await message.guild.ban(message.author, reason=MOTIVO)
+        except:
+            pass
         return
 
     await bot.process_commands(message)
