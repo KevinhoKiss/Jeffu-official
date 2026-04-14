@@ -56,27 +56,34 @@ def carregar():
     if not os.path.exists(ARQUIVO):
         return {}
     try:
-        with open(ARQUIVO, "r") as f:
+        with open(ARQUIVO, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
         return {}
 
 def salvar(data):
-    with open(ARQUIVO, "w") as f:
-        json.dump(data, f, indent=4)
+    tmp = ARQUIVO + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        os.replace(tmp, ARQUIVO)
+    except Exception:
+        # fallback simples
+        with open(ARQUIVO, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
 
 def carregar_autorizados():
     if not os.path.exists(AUTORIZADOS_FILE):
         return []
     try:
-        with open(AUTORIZADOS_FILE, "r") as f:
+        with open(AUTORIZADOS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
         return []
 
 def salvar_autorizados(lista):
-    with open(AUTORIZADOS_FILE, "w") as f:
-        json.dump(lista, f, indent=4)
+    with open(AUTORIZADOS_FILE, "w", encoding="utf-8") as f:
+        json.dump(lista, f, indent=4, ensure_ascii=False)
 
 # ==================== UTILITÁRIOS DE CARGO ====================
 async def get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
@@ -847,8 +854,7 @@ async def on_message(message):
         saudacoes = {
             "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
             "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
-            "site caiu": "Da uma olhada em <#1409296003034644542> <#1409296003034644542>"
+            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
         }
 
         for chave in saudacoes:
@@ -856,38 +862,6 @@ async def on_message(message):
                 await message.reply(saudacoes[chave], mention_author=False)
                 return
 
-        # ==================== SUPORTE ====================
-        palavras_chave = [
-            "login", "senha", "esqueci", "não consigo", "acesso",
-            "nao consigo", "ajuda", "ticket", "suporte"
-        ]
-
-        if any(p in texto for p in palavras_chave):
-                await message.reply(
-            "🔐 Para suporte, vá em <#1479642544429076500>",
-            mention_author=False
-        )
-        return
-
-    # ==================== QUEDA DO SITE ====================
-    frases_site = [
-        "o site caiu",
-        "site caiu",
-        "site tá fora",
-        "site ta fora",
-        "site offline",
-        "site não funciona",
-        "site nao funciona",
-        "site saiu do ar"
-    ]
-
-    if any(frase in texto for frase in frases_site):
-        await message.reply(
-            "🌐 Veja em <#1409296003034644542>",
-            mention_author=False
-        )
-        return
-    
         # ==================== INTERAÇÕES ====================
         if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
             await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
@@ -899,6 +873,38 @@ async def on_message(message):
 
         if re.search(r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?", texto):
             await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+            return
+
+        # ==================== SUPORTE ====================
+        palavras_chave = [
+            "login", "senha", "esqueci", "não consigo", "acesso",
+            "nao consigo", "ajuda", "ticket", "suporte"
+        ]
+
+        if any(p in texto for p in palavras_chave):
+            await message.reply(
+                "🔐 Para suporte, vá em <#1479642544429076500>",
+                mention_author=False
+            )
+            return
+
+        # ==================== QUEDA DO SITE ====================
+        frases_site = [
+            "o site caiu",
+            "site caiu",
+            "site tá fora",
+            "site ta fora",
+            "site offline",
+            "site não funciona",
+            "site nao funciona",
+            "site saiu do ar"
+        ]
+
+        if any(frase in texto for frase in frases_site):
+            await message.reply(
+                "🌐 Veja em <#1409296003034644542>",
+                mention_author=False
+            )
             return
 
         # ==================== BLOQUEIO ====================
