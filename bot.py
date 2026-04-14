@@ -30,12 +30,43 @@ CARGOS_AUTORIZADOS = [
 ARQUIVO = "familias.json"
 AUTORIZADOS_FILE = "autorizados.json"
 
+convites = {}
+
 # ==================== FUNÇÃO DE LOG ====================
 async def log(guild, mensagem):
     canal = guild.get_channel(LOG_CHANNEL_ID)
     if canal:
         await canal.send(mensagem)
 
+# ==================== BOTÃO ====================
+class AceitarView(discord.ui.View):
+    def __init__(self, dono_id):
+        super().__init__(timeout=60)
+        self.dono_id = dono_id
+
+    @discord.ui.button(label="✅ Aceitar convite", style=discord.ButtonStyle.green)
+    async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        user_id = str(interaction.user.id)
+        dono_id = str(self.dono_id)
+
+        data = carregar()
+
+        if dono_id not in data:
+            return await interaction.response.send_message("❌ Família não existe", ephemeral=True)
+
+        if user_id in data[dono_id]["membros"]:
+            return await interaction.response.send_message("❌ Você já está na família", ephemeral=True)
+
+        data[dono_id]["membros"].append(user_id)
+        salvar(data)
+
+        cargo = discord.utils.get(interaction.guild.roles, name="Família")
+        if cargo:
+            await interaction.user.add_roles(cargo)
+
+        await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
+        
 # ==================== MONGO (NOVO) ====================
 mongo = None
 try:
@@ -73,6 +104,7 @@ def salvar_autorizados(lista):
         json.dump(lista, f, indent=4)
 
 # ==================== SISTEMA FAMÍLIA ====================
+
 @bot.command()
 async def familia(ctx):
 
@@ -89,7 +121,7 @@ async def familia(ctx):
     data = carregar()
     user_id = str(ctx.author.id)
 
-    # 🔥 Mongo salva também (sem quebrar JSON)
+    # Mongo (opcional)
     if mongo:
         familias_db.update_one(
             {"user": user_id},
@@ -113,6 +145,66 @@ async def familia(ctx):
     )
 
     await ctx.reply(embed=embed, mention_author=False)
+
+
+# ==================== BOTÃO DE CONVITE ====================
+
+class AceitarView(discord.ui.View):
+    def __init__(self, dono_id):
+        super().__init__(timeout=60)
+        self.dono_id = dono_id
+
+    @discord.ui.button(label="✅ Aceitar convite", style=discord.ButtonStyle.green)
+    async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        user_id = str(interaction.user.id)
+        dono_id = str(self.dono_id)
+
+        data = carregar()
+
+        if dono_id not in data:
+            return await interaction.response.send_message("❌ Família não existe", ephemeral=True)
+
+        if user_id in data[dono_id]["membros"]:
+            return await interaction.response.send_message("❌ Você já está na família", ephemeral=True)
+
+        data[dono_id]["membros"].append(user_id)
+        salvar(data)
+
+        cargo = discord.utils.get(interaction.guild.roles, name="Família")
+        if cargo:
+            await interaction.user.add_roles(cargo)
+
+        await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
+
+
+# ==================== COMANDO CONVIDAR ====================
+
+@bot.command()
+async def convidar(ctx, membro: discord.Member):
+
+    autorizados = carregar_autorizados()
+
+    if not (
+        any(role.id in CARGOS_AUTORIZADOS for role in ctx.author.roles)
+        or ctx.author.guild_permissions.administrator
+        or ctx.author.id == DONO_ID
+        or ctx.author.id in autorizados
+    ):
+        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
+
+    view = AceitarView(ctx.author.id)
+
+    try:
+        await membro.send(
+            f"📩 Você foi convidado para uma família por {ctx.author.mention}",
+            view=view
+        )
+
+        await ctx.reply(f"✅ Convite enviado para {membro.mention}")
+
+    except:
+        await ctx.reply("❌ Não consegui enviar DM para esse usuário")
 
 # ==================== SLASH ====================
 @bot.tree.command(name="autorizar", description="Autorizar usuário")
