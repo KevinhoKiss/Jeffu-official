@@ -1,30 +1,32 @@
 import discord
 from discord.ext import commands
-import json
 import os
 import traceback
 import re
+import json
 
-# ================= CONFIG =================
+# ==================== CONFIG ====================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-ARQUIVO = "familias.json"
-AUTORIZADOS_FILE = "autorizados.json"
-
+# 🔴 CONFIG FIXA
 DONO_ID = 766709835701682208
 MOTIVO = "Divulgação de servidor"
 
+# ✅ CARGOS DOS CHEFES
 CARGOS_AUTORIZADOS = [
     1464361173305655389,
     1409338610854920374,
     1409306638548209826
 ]
 
-# ================= BANCO =================
+ARQUIVO = "familias.json"
+AUTORIZADOS_FILE = "autorizados.json"
+
+# ==================== BANCO ====================
 def carregar():
     if not os.path.exists(ARQUIVO):
         return {}
@@ -45,7 +47,7 @@ def salvar_autorizados(lista):
     with open(AUTORIZADOS_FILE, "w") as f:
         json.dump(lista, f, indent=4)
 
-# ================= EMBED =================
+# ==================== EMBED ====================
 def criar_embed(user, fam):
     embed = discord.Embed(
         title=f"👥 {fam['nome']}",
@@ -61,7 +63,7 @@ def criar_embed(user, fam):
 
     return embed
 
-# ================= SELECT CORRIGIDO =================
+# ==================== SELECT ====================
 class ConvidarSelect(discord.ui.UserSelect):
     def __init__(self, dono_id):
         super().__init__(placeholder="Escolha um usuário...", min_values=1, max_values=1)
@@ -86,7 +88,7 @@ class ConvidarView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(ConvidarSelect(dono_id))
 
-# ================= VIEW =================
+# ==================== VIEW ====================
 class FamiliaView(discord.ui.View):
     def __init__(self, dono_id):
         super().__init__(timeout=None)
@@ -137,7 +139,7 @@ class FamiliaView(discord.ui.View):
 
         await interaction.response.send_message("🗑️ Família excluída!", ephemeral=True)
 
-# ================= COMANDO =================
+# ==================== COMANDO FAMÍLIA ====================
 @bot.command()
 async def familia(ctx):
 
@@ -149,7 +151,7 @@ async def familia(ctx):
         or ctx.author.id == DONO_ID
         or ctx.author.id in autorizados
     ):
-        return await ctx.reply("❌ Sem permissão!", mention_author=False)
+        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
 
     data = carregar()
     user_id = str(ctx.author.id)
@@ -168,8 +170,8 @@ async def familia(ctx):
 
     await ctx.reply(embed=embed, view=view, mention_author=False)
 
-# ================= SLASH =================
-@bot.tree.command(name="autorizar")
+# ==================== SLASH ====================
+@bot.tree.command(name="autorizar", description="Autorizar usuário")
 async def autorizar(interaction: discord.Interaction, user: discord.Member):
 
     if not (interaction.user.id == DONO_ID or interaction.user.guild_permissions.administrator):
@@ -183,15 +185,137 @@ async def autorizar(interaction: discord.Interaction, user: discord.Member):
 
     await interaction.response.send_message(f"✅ {user.mention} autorizado!", ephemeral=True)
 
-# ================= READY =================
+# ==================== READY ====================
 @bot.event
 async def on_ready():
-    print(f"✅ {bot.user} online!")
+    print(f'✅ Bot {bot.user} conectado!')
 
-    await bot.tree.sync()
+    try:
+        await bot.change_presence(
+            status=discord.Status.online,
+            activity=discord.Game(name="Suporte - Tickets")
+        )
+        await bot.tree.sync()
+    except Exception:
+        traceback.print_exc()
 
-# ================= TOKEN =================
+# ==================== MENSAGENS ====================
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    print(f"📨 {message.author}: {message.content}")
+    texto = message.content.lower()
+    texto_limpo = texto.strip()
+
+    # ==================== SAUDAÇÕES ====================
+    saudacoes = {
+        "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+        "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+        "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+    }
+
+    for chave in saudacoes:
+        if texto_limpo.startswith(chave):
+            await message.reply(saudacoes[chave], mention_author=False)
+            return
+
+    # ==================== INTERAÇÕES COM JEFFU ====================
+
+    padrao_agradecimento = r"(agradecido|obg|obrigado).*(jeffu)?"
+    if re.search(padrao_agradecimento, texto):
+        await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
+        return
+
+    padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
+    if re.search(padrao_amor, texto):
+        await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
+        return
+
+    padrao_cala_boca = r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?"
+    if re.search(padrao_cala_boca, texto):
+        await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+        return
+
+    # ==================== BLOQUEIO DE CONVITES ====================
+    invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
+
+    if re.search(invite_pattern, message.content):
+        try:
+            invite_link = re.search(invite_pattern, message.content).group(0)
+            invite = await bot.fetch_invite(invite_link)
+
+            if invite.guild.id != message.guild.id:
+
+                try:
+                    await message.author.send(
+                        f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {MOTIVO}"
+                    )
+                except:
+                    pass
+
+                await message.delete()
+                await message.guild.ban(message.author, reason=MOTIVO)
+
+                dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
+
+                try:
+                    await dono.send(
+                        f"🚨 BANIMENTO\n\n"
+                        f"👤 {message.author} ({message.author.id})\n"
+                        f"📌 Motivo: {MOTIVO}\n"
+                        f"💬 {message.content}\n"
+                        f"🌐 {message.guild.name}"
+                    )
+                except:
+                    pass
+
+                return
+
+        except:
+            await message.delete()
+            await message.guild.ban(message.author, reason="Convite suspeito")
+            return
+
+    # ==================== SUPORTE ====================
+    palavras_chave = [
+        "login", "senha", "esqueci", "não consigo", "acesso",
+        "nao consigo", "ajuda", "ticket", "suporte"
+    ]
+
+    if any(p in texto for p in palavras_chave):
+        await message.reply(
+            "🔐 Para suporte relacionado ao site, vá em <#1479642544429076500>",
+            mention_author=False
+        )
+        return
+
+    # ==================== QUEDA DO SITE ====================
+    frases_site = [
+        "o site caiu",
+        "site caiu",
+        "site tá fora",
+        "site ta fora",
+        "site offline",
+        "site não funciona",
+        "site nao funciona",
+        "site saiu do ar"
+    ]
+
+    if any(frase in texto for frase in frases_site):
+        await message.reply(
+            "🌐 Veja em <#1409296003034644542>",
+            mention_author=False
+        )
+        return
+
+    await bot.process_commands(message)
+
+# ==================== TOKEN ====================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if TOKEN:
     bot.run(TOKEN)
+else:
+    print("❌ Token não encontrado!")
