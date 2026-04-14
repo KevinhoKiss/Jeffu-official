@@ -212,18 +212,23 @@ class EditarFamiliaView(discord.ui.View):
         self.dono_id = dono_id
         self.familia_id = familia_id
 
-    @discord.ui.button(label="Nome", style=discord.ButtonStyle.secondary, custom_id="editar:nome")
-    async def nome(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _await_response_and_save(self, interaction: discord.Interaction, prompt: str, field: str, transform=None, allow_attachments=False):
+        """
+        Prompt the user (ephemeral), wait for their next message in the same channel,
+        then save the content (or attachment URL) into familias.json under the given field.
+        transform: optional function to transform the raw message content before saving.
+        allow_attachments: if True and the user sends an attachment, save the attachment URL.
+        """
         if str(interaction.user.id) != str(self.dono_id):
             return await interaction.response.send_message("❌ Apenas o dono pode editar.", ephemeral=True)
 
-        await interaction.response.send_message("✏️ Envie o novo nome no chat. Você tem 30 segundos.", ephemeral=True)
+        await interaction.response.send_message(prompt, ephemeral=True)
 
         def check(m):
             return m.author.id == interaction.user.id and m.channel == interaction.channel
 
         try:
-            msg = await bot.wait_for("message", timeout=30.0, check=check)
+            msg = await bot.wait_for("message", timeout=60.0, check=check)
         except asyncio.TimeoutError:
             return await interaction.followup.send("⏰ Tempo esgotado. Tente novamente.", ephemeral=True)
 
@@ -232,22 +237,86 @@ class EditarFamiliaView(discord.ui.View):
         if dono_key not in data:
             return await interaction.followup.send("❌ Família não encontrada.", ephemeral=True)
 
-        data[dono_key]["nome"] = msg.content.strip() or data[dono_key].get("nome", "Minha Família")
+        # Determine value to save
+        value = None
+        if allow_attachments and msg.attachments:
+            # save first attachment URL
+            value = msg.attachments[0].url
+        else:
+            value = msg.content.strip()
+
+        if transform:
+            try:
+                value = transform(value)
+            except Exception:
+                return await interaction.followup.send("❌ Valor inválido.", ephemeral=True)
+
+        # If empty, keep previous
+        if not value:
+            value = data[dono_key].get(field, "")
+
+        data[dono_key][field] = value
         salvar(data)
 
-        await interaction.followup.send(f"✅ Nome alterado para **{data[dono_key]['nome']}**", ephemeral=True)
+        # respond confirming change
+        display = value
+        if field == "cor":
+            # show as-is (name or HEX)
+            display = value
+        if field == "icone":
+            display = value if value else "Nenhum"
+        await interaction.followup.send(f"✅ {field.capitalize()} alterado para **{display}**", ephemeral=True)
+
+    @discord.ui.button(label="Nome", style=discord.ButtonStyle.secondary, custom_id="editar:nome")
+    async def nome(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._await_response_and_save(
+            interaction,
+            "✏️ Envie o novo nome no chat. Você tem 60 segundos.",
+            field="nome"
+        )
 
     @discord.ui.button(label="Descrição", style=discord.ButtonStyle.secondary, custom_id="editar:descricao")
     async def descricao(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("✏️ Envie a nova descrição no chat (resposta efêmera).", ephemeral=True)
+        await self._await_response_and_save(
+            interaction,
+            "✏️ Envie a nova descrição no chat. Você tem 60 segundos.",
+            field="descricao"
+        )
 
     @discord.ui.button(label="Ícone", style=discord.ButtonStyle.secondary, custom_id="editar:icone")
     async def icone(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("✏️ Envie o link do ícone ou anexe a imagem.", ephemeral=True)
+        await self._await_response_and_save(
+            interaction,
+            "✏️ Envie o link do ícone ou anexe a imagem. Você tem 60 segundos.",
+            field="icone",
+            allow_attachments=True
+        )
 
     @discord.ui.button(label="Cor", style=discord.ButtonStyle.secondary, custom_id="editar:cor")
     async def cor(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("✏️ Envie a cor em HEX (ex: #5865F2).", ephemeral=True)
+        # Accept either a HEX like #5865F2 or a name (e.g., "Azul Padrão" or a role name)
+        def transform_cor(v):
+            v = v.strip()
+            if not v:
+                return v
+            # normalize hex
+            if v.startswith("#"):
+                # validate hex length 6
+                hexpart = v.replace("#", "")
+                if len(hexpart) == 6:
+                    # uppercase
+                    return f"#{hexpart.upper()}"
+                else:
+                    raise ValueError("HEX inválido")
+            # otherwise keep as name
+            return v
+
+        await self._await_response_and_save(
+            interaction,
+            "✏️ Envie a cor em HEX (ex: #5865F2) ou um nome (ex: Azul Padrão). Você tem 60 segundos.",
+            field="cor",
+            transform=transform_cor
+        )
 
     @discord.ui.button(label="Voltar", style=discord.ButtonStyle.gray, custom_id="editar:voltar")
     async def voltar(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -324,20 +393,54 @@ async def enviar_embed_gerenciar(ctx_or_interaction, dono_id):
     membros_count = len(familia.get("membros", []))
     limite = familia.get("limite", 50)
     cargo_name = familia.get("cargo", nome)  # se tiver cargo salvo
-    cor_hex = familia.get("cor", "#5865F2")
+    cor_value = familia.get("cor", "#5865F2")  # pode ser "#5865F2" ou "Nome da Cor"
     vip = familia.get("vip", "Nenhum")
 
-    # tenta converter cor hex para int; se falhar, usa cor padrão
-    try:
-        color_int = int(cor_hex.replace("#",""), 16)
-    except:
-        color_int = 0x5865F2
+    # tenta obter cargo real no servidor para usar a cor do cargo (se possível)
+    color_int = 0x5865F2
+    cargo_display = f"🏠 @{cargo_name}"
+    cor_display = cor_value
+
+    guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
+    if guild:
+        # tenta achar cargo pelo nome salvo em 'cargo_name'
+        role = discord.utils.get(guild.roles, name=cargo_name)
+        if role:
+            # usa a cor do cargo para o embed
+            try:
+                color_int = role.color.value
+            except:
+                color_int = color_int
+            cargo_display = f"🏠 {role.name}"
+        else:
+            # se 'cor_value' for um nome de cargo existente, tenta usar a cor desse cargo
+            role_by_cor = discord.utils.get(guild.roles, name=cor_value)
+            if role_by_cor:
+                try:
+                    color_int = role_by_cor.color.value
+                except:
+                    color_int = color_int
+                cor_display = role_by_cor.name
+
+    # se cor_value for HEX, converte para int e mostra o HEX como display
+    if isinstance(cor_value, str) and cor_value.startswith("#"):
+        try:
+            color_int = int(cor_value.replace("#", ""), 16)
+            cor_display = cor_value.upper()
+        except:
+            # mantém color_int padrão se falhar
+            cor_display = cor_value
+
+    # se cor_value for um nome (não começa com #) e não foi resolvido para um role, mostramos o nome
+    if isinstance(cor_value, str) and not cor_value.startswith("#"):
+        cor_display = cor_value
 
     embed = discord.Embed(title=f"👥 **{nome}**", color=color_int)
     embed.add_field(name="Status", value=f"{status} · Dono: <@{dono}>", inline=False)
     embed.add_field(name="Membros", value=f"{membros_count}/{limite}", inline=True)
-    embed.add_field(name="Cargo", value=f"🏠 @{cargo_name}", inline=True)
+    embed.add_field(name="Cargo", value=cargo_display, inline=True)
     embed.add_field(name="Tier VIP", value=vip, inline=True)
+    embed.add_field(name="Cor", value=cor_display, inline=True)
 
     membros = "\n".join(f"👑 <@{m}>" if m == str(dono) else f"<@{m}>" for m in familia.get("membros", []))
     embed.add_field(name="Membros:", value=membros or "Nenhum", inline=False)
