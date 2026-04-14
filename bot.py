@@ -40,6 +40,18 @@ async def on_message(message):
     print(f"📨 {message.author}: {message.content}")
     texto = message.content.lower()
 
+    # ==================== SAUDAÇÕES ====================
+    saudacoes = {
+        "bom dia": "Bom diia! <:shame:1466765431137370379>  como foi sua noite? Dormiu bem?",
+        "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Ja se hidratou hoje? <:FBI:1466776866122629252>",
+        "boa noite": "Boa noite!  Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+    }
+
+    for chave, resposta in saudacoes.items():
+        if chave in texto:
+            await message.reply(resposta, mention_author=False)
+            return
+
     # ==================== BLOQUEIO DE CONVITES ====================
     invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
