@@ -12,10 +12,6 @@ try:
 except:
     MongoClient = None
 
-# Trechos originais do arquivo (incluídos aqui como referência):
-# embed = discord.Embed( title=f"👥 {data[user_id]['nome']}", color=0x5865F2 )
-# embed.add_field(name="👑 Dono", value=f"<@{data[user_id]['dono']}>", inline=False)
-
 # ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
 LOG_CHANNEL_ID = 1466542559730991164
@@ -82,6 +78,100 @@ def salvar_autorizados(lista):
     with open(AUTORIZADOS_FILE, "w") as f:
         json.dump(lista, f, indent=4)
 
+# ==================== UTILITÁRIOS DE CARGO ====================
+async def get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
+    """
+    Procura um cargo pelo nome; se não existir, cria.
+    Retorna o objeto Role ou None em caso de falha.
+    """
+    try:
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role:
+            return role
+        # cria o cargo (bot precisa de Manage Roles)
+        if color_int is not None:
+            role = await guild.create_role(name=role_name, colour=discord.Colour(color_int), reason="Criado pelo sistema de famílias")
+        else:
+            role = await guild.create_role(name=role_name, reason="Criado pelo sistema de famílias")
+        return role
+    except Exception:
+        return None
+
+async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membros_list: list):
+    """
+    Aplica o cargo a todos os membros listados (membros_list contém IDs como strings).
+    """
+    for m_id in membros_list:
+        try:
+            membro = guild.get_member(int(m_id))
+            if membro and role not in membro.roles:
+                await membro.add_roles(role)
+        except Exception:
+            pass
+
+async def atualizar_ou_criar_role_da_familia(dono_key: str):
+    """
+    Garante que exista um cargo para a família dono_key.
+    - Usa familia['nome'] como nome do cargo.
+    - Usa familia['cor'] (HEX) para definir cor do cargo se for HEX.
+    - Salva role_id em familias.json.
+    - Aplica o cargo a todos os membros.
+    """
+    data = carregar()
+    familia = data.get(str(dono_key))
+    if not familia:
+        return None
+
+    guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
+    if not guild:
+        return None
+
+    nome_familia = familia.get("nome", "Minha Família")
+    cor_value = familia.get("cor", None)  # pode ser "#5865F2" ou nome
+    color_int = None
+    if isinstance(cor_value, str) and cor_value.startswith("#"):
+        try:
+            color_int = int(cor_value.replace("#", ""), 16)
+        except:
+            color_int = None
+
+    # tenta usar role_id salvo
+    role = None
+    role_id = familia.get("role_id")
+    if role_id:
+        try:
+            role = guild.get_role(int(role_id))
+        except:
+            role = None
+
+    # se role existe mas nome mudou, tenta renomear
+    if role:
+        try:
+            if role.name != nome_familia:
+                await role.edit(name=nome_familia)
+        except Exception:
+            pass
+        # atualiza cor se possível
+        if color_int is not None:
+            try:
+                await role.edit(colour=discord.Colour(color_int))
+            except Exception:
+                pass
+    else:
+        # procura por cargo com mesmo nome (reutiliza se achar)
+        role = discord.utils.get(guild.roles, name=nome_familia)
+        if not role:
+            role = await get_or_create_role(guild, nome_familia, color_int)
+
+    # se conseguiu criar/obter role, salva role_id e aplica a todos
+    if role:
+        familia["role_id"] = role.id
+        salvar(data)
+        await aplicar_cargo_a_todos(guild, role, familia.get("membros", []))
+        return role
+
+    return None
+
 # ==================== BANCO ====================
 class AceitarView(discord.ui.View):
     def __init__(self, dono_id):
@@ -116,15 +206,26 @@ class AceitarView(discord.ui.View):
 
         convites.pop(interaction.user.id, None)
 
-        # adicionar cargo
+        # adicionar cargo (garante que o cargo exista e aplique ao membro)
         guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
 
         if guild:
             membro = guild.get_member(interaction.user.id)
-            cargo = discord.utils.get(guild.roles, name="Família")
+
+            # garante que o cargo da família exista e esteja aplicado a todos
+            try:
+                await atualizar_ou_criar_role_da_familia(convite["dono"])
+                data = carregar()
+                role_id = data.get(str(convite["dono"]), {}).get("role_id")
+                cargo = guild.get_role(int(role_id)) if role_id else None
+            except Exception:
+                cargo = None
 
             if membro and cargo:
-                await membro.add_roles(cargo)
+                try:
+                    await membro.add_roles(cargo)
+                except Exception:
+                    pass
 
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
         
@@ -188,9 +289,16 @@ class PainelView(discord.ui.View):
                 info["membros"].remove(user_id)
                 salvar(data)
 
-                cargo = discord.utils.get(interaction.guild.roles, name="Família")
-                if cargo:
-                    await interaction.user.remove_roles(cargo)
+                # tenta remover role do usuário se existir
+                try:
+                    guild = interaction.guild
+                    role_id = info.get("role_id")
+                    if guild and role_id:
+                        role = guild.get_role(int(role_id))
+                        if role:
+                            await interaction.user.remove_roles(role)
+                except Exception:
+                    pass
 
                 return await interaction.response.send_message(
                     "👋 Você saiu da família!",
@@ -257,6 +365,13 @@ class EditarFamiliaView(discord.ui.View):
 
         data[dono_key][field] = value
         salvar(data)
+
+        # se alterou nome ou cor (ou cargo), atualiza/cria o role e aplica a todos
+        if field in ("nome", "cor", "cargo"):
+            try:
+                await atualizar_ou_criar_role_da_familia(dono_key)
+            except Exception:
+                pass
 
         # respond confirming change
         display = value
@@ -360,6 +475,18 @@ class GerenciarFamiliaView(discord.ui.View):
             return await interaction.response.send_message("❌ Apenas o dono pode excluir.", ephemeral=True)
         data = carregar()
         if str(self.dono_id) in data:
+            # tenta remover o cargo associado (opcional)
+            try:
+                guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
+                if guild:
+                    role_id = data[str(self.dono_id)].get("role_id")
+                    if role_id:
+                        role = guild.get_role(int(role_id))
+                        if role:
+                            await role.delete(reason="Família excluída")
+            except Exception:
+                pass
+
             del data[str(self.dono_id)]
             salvar(data)
             return await interaction.response.send_message("🗑️ Família excluída.", ephemeral=True)
@@ -403,24 +530,40 @@ async def enviar_embed_gerenciar(ctx_or_interaction, dono_id):
 
     guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
     if guild:
-        # tenta achar cargo pelo nome salvo em 'cargo_name'
-        role = discord.utils.get(guild.roles, name=cargo_name)
+        # tenta achar cargo pelo role_id salvo
+        role = None
+        role_id = familia.get("role_id")
+        if role_id:
+            try:
+                role = guild.get_role(int(role_id))
+            except:
+                role = None
+
+        # se role existe, usa suas propriedades
         if role:
-            # usa a cor do cargo para o embed
             try:
                 color_int = role.color.value
             except:
                 color_int = color_int
             cargo_display = f"🏠 {role.name}"
         else:
-            # se 'cor_value' for um nome de cargo existente, tenta usar a cor desse cargo
-            role_by_cor = discord.utils.get(guild.roles, name=cor_value)
-            if role_by_cor:
+            # tenta achar cargo pelo nome salvo em 'cargo_name'
+            role_by_name = discord.utils.get(guild.roles, name=cargo_name)
+            if role_by_name:
                 try:
-                    color_int = role_by_cor.color.value
+                    color_int = role_by_name.color.value
                 except:
                     color_int = color_int
-                cor_display = role_by_cor.name
+                cargo_display = f"🏠 {role_by_name.name}"
+            else:
+                # se 'cor_value' for um nome de cargo existente, tenta usar a cor desse cargo
+                role_by_cor = discord.utils.get(guild.roles, name=cor_value)
+                if role_by_cor:
+                    try:
+                        color_int = role_by_cor.color.value
+                    except:
+                        color_int = color_int
+                    cor_display = role_by_cor.name
 
     # se cor_value for HEX, converte para int e mostra o HEX como display
     if isinstance(cor_value, str) and cor_value.startswith("#"):
@@ -478,6 +621,19 @@ async def familia(ctx):
             "membros": [user_id]
         }
         salvar(data)
+
+        # cria/atualiza cargo da família e aplica ao dono
+        try:
+            role = await atualizar_ou_criar_role_da_familia(user_id)
+            if role:
+                membro = ctx.guild.get_member(ctx.author.id)
+                if membro:
+                    try:
+                        await membro.add_roles(role)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     membros = "\n".join(f"<@{m}>" for m in data[user_id]["membros"])
 
@@ -543,6 +699,17 @@ async def sair(ctx):
             info["membros"].remove(user_id)
             salvar(data)
 
+            # tenta remover role do usuário se existir
+            try:
+                guild = ctx.guild
+                role_id = info.get("role_id")
+                if guild and role_id:
+                    role = guild.get_role(int(role_id))
+                    if role:
+                        await ctx.author.remove_roles(role)
+            except Exception:
+                pass
+
             return await ctx.reply("👋 Você saiu da família!")
 
     await ctx.reply("❌ Você não está em nenhuma família")
@@ -569,6 +736,17 @@ async def expulsar(ctx, membro: discord.Member):
 
     familia["membros"].remove(alvo_id)
     salvar(data)
+
+    # tenta remover role do membro se existir
+    try:
+        guild = ctx.guild
+        role_id = familia.get("role_id")
+        if guild and role_id:
+            role = guild.get_role(int(role_id))
+            if role:
+                await membro.remove_roles(role)
+    except Exception:
+        pass
 
     await ctx.reply(f"🚫 {membro.mention} foi expulso")
 
