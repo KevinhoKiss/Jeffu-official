@@ -111,16 +111,18 @@ class AceitarView(discord.ui.View):
 
         convites.pop(interaction.user.id, None)
 
-       guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
+        # adicionar cargo
+        guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
 
-if guild:
-    membro = guild.get_member(interaction.user.id)
-    cargo = discord.utils.get(guild.roles, name="Família")
+        if guild:
+            membro = guild.get_member(interaction.user.id)
+            cargo = discord.utils.get(guild.roles, name="Família")
 
-    if membro and cargo:
-        await membro.add_roles(cargo)
+            if membro and cargo:
+                await membro.add_roles(cargo)
 
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
+        
 
 class PainelView(discord.ui.View):
     def __init__(self):
@@ -407,10 +409,10 @@ async def on_message(message):
             "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
         }
 
-        if texto_limpo in saudacoes:
-            await message.reply(saudacoes[texto_limpo], mention_author=False)
-            return
-
+        for chave in saudacoes:
+            if texto_limpo.startswith(chave):
+                await message.reply(saudacoes[chave], mention_author=False)
+                return
         # ==================== INTERAÇÕES ====================
         if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
             await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
@@ -455,12 +457,6 @@ async def on_message(message):
                 pass
 
         # ✅ MUITO IMPORTANTE (não remover)
-        await bot.process_commands(message)
-
-    except Exception as e:
-        print(f"Erro no on_message: {e}")
-
-        # ==================== COMANDOS ====================
         await bot.process_commands(message)
 
     except Exception as e:
