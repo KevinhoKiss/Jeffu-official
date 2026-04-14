@@ -18,12 +18,10 @@ AUTORIZADOS_FILE = "autorizados.json"
 DONO_ID = 766709835701682208
 MOTIVO = "Divulgação de servidor"
 
-# ✅ CARGOS DOS CHEFES
 CARGOS_AUTORIZADOS = [
     1464361173305655389,
     1409338610854920374,
-    1409306638548209826,
-    1466216337339846828
+    1409306638548209826
 ]
 
 # ================= BANCO =================
@@ -63,7 +61,7 @@ def criar_embed(user, fam):
 
     return embed
 
-# ================= SELECT =================
+# ================= SELECT CORRIGIDO =================
 class ConvidarSelect(discord.ui.UserSelect):
     def __init__(self, dono_id):
         super().__init__(placeholder="Escolha um usuário...", min_values=1, max_values=1)
@@ -88,7 +86,7 @@ class ConvidarView(discord.ui.View):
         super().__init__(timeout=60)
         self.add_item(ConvidarSelect(dono_id))
 
-# ================= VIEW PRINCIPAL =================
+# ================= VIEW =================
 class FamiliaView(discord.ui.View):
     def __init__(self, dono_id):
         super().__init__(timeout=None)
@@ -102,7 +100,7 @@ class FamiliaView(discord.ui.View):
 
     @discord.ui.button(label="Editar", emoji="✏️", style=discord.ButtonStyle.primary)
     async def editar(self, interaction, button):
-        await interaction.response.send_message("✏️ Envie o novo nome da família.", ephemeral=True)
+        await interaction.response.send_message("Digite o novo nome:", ephemeral=True)
 
         def check(m):
             return m.author == interaction.user
@@ -139,7 +137,7 @@ class FamiliaView(discord.ui.View):
 
         await interaction.response.send_message("🗑️ Família excluída!", ephemeral=True)
 
-# ================= COMANDO FAMÍLIA =================
+# ================= COMANDO =================
 @bot.command()
 async def familia(ctx):
 
@@ -151,7 +149,7 @@ async def familia(ctx):
         or ctx.author.id == DONO_ID
         or ctx.author.id in autorizados
     ):
-        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
+        return await ctx.reply("❌ Sem permissão!", mention_author=False)
 
     data = carregar()
     user_id = str(ctx.author.id)
@@ -170,8 +168,8 @@ async def familia(ctx):
 
     await ctx.reply(embed=embed, view=view, mention_author=False)
 
-# ================= SLASH COMMANDS =================
-@bot.tree.command(name="autorizar", description="Autorizar usuário")
+# ================= SLASH =================
+@bot.tree.command(name="autorizar")
 async def autorizar(interaction: discord.Interaction, user: discord.Member):
 
     if not (interaction.user.id == DONO_ID or interaction.user.guild_permissions.administrator):
@@ -179,78 +177,21 @@ async def autorizar(interaction: discord.Interaction, user: discord.Member):
 
     autorizados = carregar_autorizados()
 
-    if user.id in autorizados:
-        return await interaction.response.send_message("⚠️ Já autorizado!", ephemeral=True)
-
-    autorizados.append(user.id)
-    salvar_autorizados(autorizados)
+    if user.id not in autorizados:
+        autorizados.append(user.id)
+        salvar_autorizados(autorizados)
 
     await interaction.response.send_message(f"✅ {user.mention} autorizado!", ephemeral=True)
-
-@bot.tree.command(name="remover_autorizacao", description="Remover autorização")
-async def remover_autorizacao(interaction: discord.Interaction, user: discord.Member):
-
-    if not (interaction.user.id == DONO_ID or interaction.user.guild_permissions.administrator):
-        return await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-
-    autorizados = carregar_autorizados()
-
-    if user.id not in autorizados:
-        return await interaction.response.send_message("⚠️ Não está autorizado!", ephemeral=True)
-
-    autorizados.remove(user.id)
-    salvar_autorizados(autorizados)
-
-    await interaction.response.send_message(f"❌ {user.mention} removido!", ephemeral=True)
-
-# ================= MENSAGENS =================
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    texto = message.content.lower()
-    texto_limpo = texto.strip()
-
-    # SAUDAÇÕES
-    if texto_limpo.startswith("bom dia"):
-        await message.reply("Bom dia! ☀️", mention_author=False)
-        return
-
-    if texto_limpo.startswith("boa tarde"):
-        await message.reply("Boa tarde! 🌤️", mention_author=False)
-        return
-
-    if texto_limpo.startswith("boa noite"):
-        await message.reply("Boa noite! 🌙", mention_author=False)
-        return
-
-    # BLOQUEIO DE CONVITES
-    if re.search(r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)", message.content):
-        try:
-            await message.delete()
-            await message.guild.ban(message.author, reason=MOTIVO)
-        except:
-            pass
-        return
-
-    await bot.process_commands(message)
 
 # ================= READY =================
 @bot.event
 async def on_ready():
     print(f"✅ {bot.user} online!")
 
-    try:
-        synced = await bot.tree.sync()
-        print(f"🔄 Slash sincronizados ({len(synced)})")
-    except Exception:
-        traceback.print_exc()
+    await bot.tree.sync()
 
 # ================= TOKEN =================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if TOKEN:
     bot.run(TOKEN)
-else:
-    print("❌ Token não encontrado!")
