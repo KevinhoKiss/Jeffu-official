@@ -144,7 +144,40 @@ async def familia(ctx):
 
     await ctx.reply(embed=embed, mention_author=False)
 
+# ==================== PROTEÇÃO CONTRA CRASH ====================
+@bot.command()
+async def convidar(ctx, membro: discord.Member = None):
 
+    if membro is None:
+        return await ctx.reply("❌ Você precisa mencionar alguém!")
+
+    autorizados = carregar_autorizados()
+
+    if not (
+        any(role.id in CARGOS_AUTORIZADOS for role in ctx.author.roles)
+        or ctx.author.guild_permissions.administrator
+        or ctx.author.id == DONO_ID
+        or ctx.author.id in autorizados
+    ):
+        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
+
+    convites[membro.id] = {
+        "dono": ctx.author.id,
+        "tempo": time.time()
+    }
+
+    view = AceitarView(ctx.author.id)
+
+    try:
+        await membro.send(
+            f"📩 Convite para a família de {ctx.author.mention} (expira em 60s)",
+            view=view
+        )
+
+        await ctx.reply(f"✅ Convite enviado para {membro.mention}")
+
+    except:
+        await ctx.reply("❌ Não consegui enviar DM para esse usuário")
 # ==================== BOTÃO ====================
 
 class AceitarView(discord.ui.View):
