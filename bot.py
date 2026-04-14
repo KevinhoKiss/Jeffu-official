@@ -153,17 +153,6 @@ class PainelView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-  @discord.ui.button(
-    label="✅ Aceitar convite",
-    style=discord.ButtonStyle.green,
-    custom_id="convite:aceitar"
-)
-async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            "Use: `!convidar @usuário`",
-            ephemeral=True
-        )
-
     @discord.ui.button(
         label="🚪 Sair",
         style=discord.ButtonStyle.red,
@@ -175,7 +164,6 @@ async def aceitar(self, interaction: discord.Interaction, button: discord.ui.But
         user_id = str(interaction.user.id)
 
         for dono, info in data.items():
-
             if user_id in info["membros"]:
 
                 if user_id == info["dono"]:
