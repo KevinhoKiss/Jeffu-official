@@ -5,6 +5,7 @@ import traceback
 import re
 import json
 import time
+import asyncio
 
 try:
     from pymongo import MongoClient
@@ -213,8 +214,28 @@ class EditarFamiliaView(discord.ui.View):
 
     @discord.ui.button(label="Nome", style=discord.ButtonStyle.secondary, custom_id="editar:nome")
     async def nome(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Abrir modal seria ideal; aqui pedimos no chat sem alterar mensagens automáticas
-        await interaction.response.send_message("✏️ Envie o novo nome no chat (resposta efêmera).", ephemeral=True)
+        if str(interaction.user.id) != str(self.dono_id):
+            return await interaction.response.send_message("❌ Apenas o dono pode editar.", ephemeral=True)
+
+        await interaction.response.send_message("✏️ Envie o novo nome no chat. Você tem 30 segundos.", ephemeral=True)
+
+        def check(m):
+            return m.author.id == interaction.user.id and m.channel == interaction.channel
+
+        try:
+            msg = await bot.wait_for("message", timeout=30.0, check=check)
+        except asyncio.TimeoutError:
+            return await interaction.followup.send("⏰ Tempo esgotado. Tente novamente.", ephemeral=True)
+
+        data = carregar()
+        dono_key = str(self.dono_id)
+        if dono_key not in data:
+            return await interaction.followup.send("❌ Família não encontrada.", ephemeral=True)
+
+        data[dono_key]["nome"] = msg.content.strip() or data[dono_key].get("nome", "Minha Família")
+        salvar(data)
+
+        await interaction.followup.send(f"✅ Nome alterado para **{data[dono_key]['nome']}**", ephemeral=True)
 
     @discord.ui.button(label="Descrição", style=discord.ButtonStyle.secondary, custom_id="editar:descricao")
     async def descricao(self, interaction: discord.Interaction, button: discord.ui.Button):
