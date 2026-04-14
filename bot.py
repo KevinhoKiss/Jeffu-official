@@ -1,149 +1,249 @@
 import discord
 from discord.ext import commands
+import json
 import os
 import traceback
 import re
 
-# ==================== CONFIG ====================
+# ================= CONFIG =================
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# 🔴 CONFIG FIXA
+ARQUIVO = "familias.json"
+AUTORIZADOS_FILE = "autorizados.json"
+
 DONO_ID = 766709835701682208
+CARGO_AUTORIZADO = 123456789012345678  # 🔥 COLOQUE O ID DO CARGO
 MOTIVO = "Divulgação de servidor"
 
-# ==================== READY ====================
-@bot.event
-async def on_ready():
-    print(f'✅ Bot {bot.user} conectado!')
+# ================= BANCO =================
+def carregar():
+    if not os.path.exists(ARQUIVO):
+        return {}
+    with open(ARQUIVO, "r") as f:
+        return json.load(f)
 
-    try:
-        await bot.change_presence(
-            status=discord.Status.online,
-            activity=discord.Game(name="Suporte - Tickets")
+def salvar(data):
+    with open(ARQUIVO, "w") as f:
+        json.dump(data, f, indent=4)
+
+def carregar_autorizados():
+    if not os.path.exists(AUTORIZADOS_FILE):
+        return []
+    with open(AUTORIZADOS_FILE, "r") as f:
+        return json.load(f)
+
+def salvar_autorizados(lista):
+    with open(AUTORIZADOS_FILE, "w") as f:
+        json.dump(lista, f, indent=4)
+
+# ================= EMBED =================
+def criar_embed(user, fam):
+    embed = discord.Embed(
+        title=f"👥 {fam['nome']}",
+        color=fam.get("cor", 0x5865F2)
+    )
+
+    embed.add_field(name="Status", value="✅ Ativa", inline=True)
+    embed.add_field(name="Dono", value=user.mention, inline=True)
+    embed.add_field(name="Membros", value=f"{len(fam['membros'])}/50", inline=False)
+
+    membros = "\n".join(f"<@{m}>" for m in fam["membros"])
+    embed.add_field(name="Lista", value=membros or "Nenhum", inline=False)
+
+    return embed
+
+# ================= VIEW PRINCIPAL =================
+class FamiliaView(discord.ui.View):
+    def __init__(self, dono_id):
+        super().__init__(timeout=None)
+        self.dono_id = str(dono_id)
+
+    async def interaction_check(self, interaction):
+        if str(interaction.user.id) != self.dono_id:
+            await interaction.response.send_message("❌ Só o dono pode usar!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Editar", emoji="✏️", style=discord.ButtonStyle.primary)
+    async def editar(self, interaction, button):
+        await interaction.response.send_message("✏️ Envie o novo nome da família.", ephemeral=True)
+
+        def check(m):
+            return m.author == interaction.user
+
+        msg = await bot.wait_for("message", check=check)
+
+        data = carregar()
+        fam = data[self.dono_id]
+        fam["nome"] = msg.content
+        salvar(data)
+
+        await interaction.followup.send("✅ Nome atualizado!", ephemeral=True)
+
+    @discord.ui.button(label="Convidar", emoji="👤", style=discord.ButtonStyle.primary)
+    async def convidar(self, interaction, button):
+        await interaction.response.send_message(
+            "Selecione um usuário:",
+            view=ConvidarView(self.dono_id),
+            ephemeral=True
         )
-    except Exception:
-        traceback.print_exc()
 
-# ==================== MENSAGENS ====================
+    @discord.ui.button(label="Membros", emoji="👥", style=discord.ButtonStyle.secondary)
+    async def membros(self, interaction, button):
+        data = carregar()
+        fam = data[self.dono_id]
+
+        membros = "\n".join(f"<@{m}>" for m in fam["membros"])
+        await interaction.response.send_message(f"👥 Membros:\n{membros}", ephemeral=True)
+
+    @discord.ui.button(label="Excluir", emoji="🗑️", style=discord.ButtonStyle.danger)
+    async def excluir(self, interaction, button):
+        data = carregar()
+        data.pop(self.dono_id, None)
+        salvar(data)
+
+        await interaction.response.send_message("🗑️ Família excluída!", ephemeral=True)
+
+# ================= VIEW CONVIDAR =================
+class ConvidarView(discord.ui.View):
+    def __init__(self, dono_id):
+        super().__init__(timeout=60)
+        self.dono_id = dono_id
+
+    @discord.ui.user_select(placeholder="Escolha um usuário...")
+    async def select(self, interaction, select):
+        user = select.values[0]
+
+        data = carregar()
+        fam = data[self.dono_id]
+
+        if str(user.id) in fam["membros"]:
+            return await interaction.response.send_message("Já está na família!", ephemeral=True)
+
+        fam["membros"].append(str(user.id))
+        salvar(data)
+
+        await interaction.response.send_message(f"✅ {user.mention} entrou!", ephemeral=True)
+
+# ================= COMANDO FAMÍLIA =================
+@bot.command()
+async def familia(ctx):
+
+    autorizados = carregar_autorizados()
+
+    if not (
+        any(role.id == CARGO_AUTORIZADO for role in ctx.author.roles)
+        or ctx.author.guild_permissions.administrator
+        or ctx.author.id == DONO_ID
+        or ctx.author.id in autorizados
+    ):
+        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
+
+    data = carregar()
+    user_id = str(ctx.author.id)
+
+    if user_id not in data:
+        data[user_id] = {
+            "nome": "Minha Família",
+            "dono": user_id,
+            "membros": [user_id],
+            "cor": 0x5865F2
+        }
+        salvar(data)
+
+    fam = data[user_id]
+
+    embed = criar_embed(ctx.author, fam)
+    view = FamiliaView(user_id)
+
+    await ctx.reply(embed=embed, view=view, mention_author=False)
+
+# ================= SLASH COMMANDS =================
+@bot.tree.command(name="autorizar", description="Autorizar usuário")
+async def autorizar(interaction: discord.Interaction, user: discord.Member):
+
+    if not (
+        interaction.user.id == DONO_ID
+        or interaction.user.guild_permissions.administrator
+    ):
+        return await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+
+    autorizados = carregar_autorizados()
+
+    if user.id in autorizados:
+        return await interaction.response.send_message("⚠️ Já autorizado!", ephemeral=True)
+
+    autorizados.append(user.id)
+    salvar_autorizados(autorizados)
+
+    await interaction.response.send_message(f"✅ {user.mention} autorizado!", ephemeral=True)
+
+
+@bot.tree.command(name="remover_autorizacao", description="Remover autorização")
+async def remover_autorizacao(interaction: discord.Interaction, user: discord.Member):
+
+    if not (
+        interaction.user.id == DONO_ID
+        or interaction.user.guild_permissions.administrator
+    ):
+        return await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
+
+    autorizados = carregar_autorizados()
+
+    if user.id not in autorizados:
+        return await interaction.response.send_message("⚠️ Não está autorizado!", ephemeral=True)
+
+    autorizados.remove(user.id)
+    salvar_autorizados(autorizados)
+
+    await interaction.response.send_message(f"❌ {user.mention} removido!", ephemeral=True)
+
+# ================= MENSAGENS =================
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    print(f"📨 {message.author}: {message.content}")
     texto = message.content.lower()
     texto_limpo = texto.strip()
 
-    # ==================== SAUDAÇÕES ====================
-    saudacoes = {
-        "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-        "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-        "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
-    }
-
-    for chave in saudacoes:
-        if texto_limpo.startswith(chave):
-            await message.reply(saudacoes[chave], mention_author=False)
-            return
-
-    # ==================== INTERAÇÕES COM JEFFU ====================
-
-        # Agradecimento
-    padrao_agradecimento = r"(agradecido|obg|obrigado).*(jeffu)?"
-    if re.search(padrao_agradecimento, texto):
-        await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
-        return
-        
-    # Amor / carinho
-    padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
-    if re.search(padrao_amor, texto):
-        await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
+    # SAUDAÇÕES
+    if texto_limpo.startswith("bom dia"):
+        await message.reply("Bom dia! ☀️", mention_author=False)
         return
 
-    # Mandar calar a boca / xingar
-    padrao_cala_boca = r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?"
-    if re.search(padrao_cala_boca, texto):
-        await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+    if texto_limpo.startswith("boa tarde"):
+        await message.reply("Boa tarde! 🌤️", mention_author=False)
         return
 
-    # ==================== BLOQUEIO DE CONVITES ====================
-    invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
-
-    if re.search(invite_pattern, message.content):
-        try:
-            invite_link = re.search(invite_pattern, message.content).group(0)
-            invite = await bot.fetch_invite(invite_link)
-
-            if invite.guild.id != message.guild.id:
-
-                try:
-                    await message.author.send(
-                        f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {MOTIVO}"
-                    )
-                except:
-                    pass
-
-                await message.delete()
-                await message.guild.ban(message.author, reason=MOTIVO)
-
-                dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
-
-                try:
-                    await dono.send(
-                        f"🚨 BANIMENTO\n\n"
-                        f"👤 {message.author} ({message.author.id})\n"
-                        f"📌 Motivo: {MOTIVO}\n"
-                        f"💬 {message.content}\n"
-                        f"🌐 {message.guild.name}"
-                    )
-                except:
-                    pass
-
-                return
-
-        except:
-            await message.delete()
-            await message.guild.ban(message.author, reason="Convite suspeito")
-            return
-
-    # ==================== SUPORTE ====================
-    palavras_chave = [
-        "login", "senha", "esqueci", "não consigo", "acesso",
-        "nao consigo", "ajuda", "ticket", "suporte"
-    ]
-
-    if any(p in texto for p in palavras_chave):
-        await message.reply(
-            "🔐 Para suporte relacionado ao site, vá em <#1479642544429076500>",
-            mention_author=False
-        )
+    if texto_limpo.startswith("boa noite"):
+        await message.reply("Boa noite! 🌙", mention_author=False)
         return
 
-    # ==================== QUEDA DO SITE ====================
-    frases_site = [
-        "o site caiu",
-        "site caiu",
-        "site tá fora",
-        "site ta fora",
-        "site offline",
-        "site não funciona",
-        "site nao funciona",
-        "site saiu do ar"
-    ]
-
-    if any(frase in texto for frase in frases_site):
-        await message.reply(
-            "🌐 Veja em <#1409296003034644542>",
-            mention_author=False
-        )
+    # BLOQUEIO DE CONVITES
+    if re.search(r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)", message.content):
+        await message.delete()
+        await message.guild.ban(message.author, reason=MOTIVO)
         return
 
     await bot.process_commands(message)
 
-# ==================== TOKEN ====================
+# ================= READY =================
+@bot.event
+async def on_ready():
+    print(f"✅ {bot.user} online!")
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"🔄 Slash sincronizados ({len(synced)})")
+    except Exception:
+        traceback.print_exc()
+
+# ================= TOKEN =================
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if TOKEN:
