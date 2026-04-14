@@ -209,6 +209,8 @@ async def on_message(message):
     texto = message.content.lower()
     texto_limpo = texto.strip()
 
+    respondeu = False  # 🔥 controle
+
     # ==================== SAUDAÇÕES ====================
     saudacoes = {
         "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
@@ -219,26 +221,22 @@ async def on_message(message):
     for chave in saudacoes:
         if texto_limpo.startswith(chave):
             await message.reply(saudacoes[chave], mention_author=False)
-            return
+            respondeu = True
 
-    # ==================== INTERAÇÕES COM JEFFU ====================
-
-    padrao_agradecimento = r"(agradecido|obg|obrigado).*(jeffu)?"
-    if re.search(padrao_agradecimento, texto):
+    # ==================== INTERAÇÕES ====================
+    if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
         await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
-        return
+        respondeu = True
 
-    padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
-    if re.search(padrao_amor, texto):
+    if re.search(r"(te amo|amo vc|amo você).*(jeffu)?", texto):
         await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
-        return
+        respondeu = True
 
-    padrao_cala_boca = r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?"
-    if re.search(padrao_cala_boca, texto):
+    if re.search(r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?", texto):
         await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
-        return
+        respondeu = True
 
-    # ==================== BLOQUEIO DE CONVITES ====================
+    # ==================== BLOQUEIO ====================
     invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
     if re.search(invite_pattern, message.content):
@@ -247,69 +245,39 @@ async def on_message(message):
             invite = await bot.fetch_invite(invite_link)
 
             if invite.guild.id != message.guild.id:
-
-                try:
-                    await message.author.send(
-                        f"🚫 Você foi banido de **{message.guild.name}**\nMotivo: {MOTIVO}"
-                    )
-                except:
-                    pass
-
                 await message.delete()
                 await message.guild.ban(message.author, reason=MOTIVO)
-
-                dono = bot.get_user(DONO_ID) or await bot.fetch_user(DONO_ID)
-
-                try:
-                    await dono.send(
-                        f"🚨 BANIMENTO\n\n"
-                        f"👤 {message.author} ({message.author.id})\n"
-                        f"📌 Motivo: {MOTIVO}\n"
-                        f"💬 {message.content}\n"
-                        f"🌐 {message.guild.name}"
-                    )
-                except:
-                    pass
-
                 return
-
         except:
             await message.delete()
             await message.guild.ban(message.author, reason="Convite suspeito")
             return
 
     # ==================== SUPORTE ====================
-    palavras_chave = [
-        "login", "senha", "esqueci", "não consigo", "acesso",
+    if any(p in texto for p in [
+        "login", "senha", "esqueci", "não consigo",
         "nao consigo", "ajuda", "ticket", "suporte"
-    ]
-
-    if any(p in texto for p in palavras_chave):
+    ]):
         await message.reply(
             "🔐 Para suporte relacionado ao site, vá em <#1479642544429076500>",
             mention_author=False
         )
-        return
+        respondeu = True
 
-    # ==================== QUEDA DO SITE ====================
-    frases_site = [
-        "o site caiu",
-        "site caiu",
-        "site tá fora",
-        "site ta fora",
-        "site offline",
-        "site não funciona",
-        "site nao funciona",
+    # ==================== SITE ====================
+    if any(frase in texto for frase in [
+        "o site caiu", "site caiu", "site tá fora",
+        "site ta fora", "site offline",
+        "site não funciona", "site nao funciona",
         "site saiu do ar"
-    ]
-
-    if any(frase in texto for frase in frases_site):
+    ]):
         await message.reply(
             "🌐 Veja em <#1409296003034644542>",
             mention_author=False
         )
-        return
+        respondeu = True
 
+    # 🔥 SEMPRE PROCESSA COMANDOS
     await bot.process_commands(message)
 
 # ==================== TOKEN ====================
