@@ -4,13 +4,15 @@ import os
 import traceback
 import re
 import json
+import time
+
 try:
     from pymongo import MongoClient
 except:
     MongoClient = None
 
 # ==================== CONFIG ====================
-LOG_CHANNEL_ID = 1466542559730991164  # seu canal de log
+LOG_CHANNEL_ID = 1466542559730991164
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,7 +32,7 @@ CARGOS_AUTORIZADOS = [
 ARQUIVO = "familias.json"
 AUTORIZADOS_FILE = "autorizados.json"
 
-convites = {}
+convites = {}  # 🔥 SÓ UMA VEZ
 
 # ==================== FUNÇÃO DE LOG ====================
 async def log(guild, mensagem):
@@ -47,8 +49,17 @@ class AceitarView(discord.ui.View):
     @discord.ui.button(label="✅ Aceitar convite", style=discord.ButtonStyle.green)
     async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
+        if interaction.user.id not in convites:
+            return await interaction.response.send_message("❌ Convite inválido", ephemeral=True)
+
+        convite = convites[interaction.user.id]
+
+        if time.time() - convite["tempo"] > 60:
+            del convites[interaction.user.id]
+            return await interaction.response.send_message("⏰ Convite expirou", ephemeral=True)
+
+        dono_id = str(convite["dono"])
         user_id = str(interaction.user.id)
-        dono_id = str(self.dono_id)
 
         data = carregar()
 
@@ -60,6 +71,8 @@ class AceitarView(discord.ui.View):
 
         data[dono_id]["membros"].append(user_id)
         salvar(data)
+
+        del convites[interaction.user.id]
 
         cargo = discord.utils.get(interaction.guild.roles, name="Família")
         if cargo:
@@ -138,12 +151,26 @@ async def familia(ctx):
 
     embed = discord.Embed(
         title=f"👥 {data[user_id]['nome']}",
-        description=membros,
         color=0x5865F2
     )
 
-    await ctx.reply(embed=embed, mention_author=False)
+    embed.add_field(
+        name="👑 Dono",
+        value=f"<@{data[user_id]['dono']}>",
+        inline=False
+    )
 
+    embed.add_field(
+        name=f"👥 Membros ({len(data[user_id]['membros'])})",
+        value=membros,
+        inline=False
+    )
+
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.timestamp = discord.utils.utcnow()
+
+    await ctx.reply(embed=embed, mention_author=False)
+    
 # ==================== PROTEÇÃO CONTRA CRASH ====================
 @bot.command()
 async def convidar(ctx, membro: discord.Member = None):
@@ -223,7 +250,10 @@ class AceitarView(discord.ui.View):
 # ==================== CONVIDAR ====================
 
 @bot.command()
-async def convidar(ctx, membro: discord.Member):
+async def convidar(ctx, membro: discord.Member = None):
+
+    if membro is None:
+        return await ctx.reply("❌ Você precisa mencionar alguém!")
 
     autorizados = carregar_autorizados()
 
