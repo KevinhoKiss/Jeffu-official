@@ -11,6 +11,10 @@ try:
 except:
     MongoClient = None
 
+# Trechos originais do arquivo (incluídos aqui como referência):
+# embed = discord.Embed( title=f"👥 {data[user_id]['nome']}", color=0x5865F2 )
+# embed.add_field(name="👑 Dono", value=f"<@{data[user_id]['dono']}>", inline=False)
+
 # ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
 LOG_CHANNEL_ID = 1466542559730991164
@@ -199,7 +203,131 @@ class PainelView(discord.ui.View):
         
 # ==================== SISTEMA FAMÍLIA COMPLETO ====================
 
-import time
+# ==================== NOVAS VIEWS E FUNÇÕES (para reproduzir o layout da imagem) ====================
+
+class EditarFamiliaView(discord.ui.View):
+    def __init__(self, dono_id, familia_id):
+        super().__init__(timeout=None)
+        self.dono_id = dono_id
+        self.familia_id = familia_id
+
+    @discord.ui.button(label="Nome", style=discord.ButtonStyle.secondary, custom_id="editar:nome")
+    async def nome(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Abrir modal seria ideal; aqui pedimos no chat sem alterar mensagens automáticas
+        await interaction.response.send_message("✏️ Envie o novo nome no chat (resposta efêmera).", ephemeral=True)
+
+    @discord.ui.button(label="Descrição", style=discord.ButtonStyle.secondary, custom_id="editar:descricao")
+    async def descricao(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✏️ Envie a nova descrição no chat (resposta efêmera).", ephemeral=True)
+
+    @discord.ui.button(label="Ícone", style=discord.ButtonStyle.secondary, custom_id="editar:icone")
+    async def icone(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✏️ Envie o link do ícone ou anexe a imagem.", ephemeral=True)
+
+    @discord.ui.button(label="Cor", style=discord.ButtonStyle.secondary, custom_id="editar:cor")
+    async def cor(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✏️ Envie a cor em HEX (ex: #5865F2).", ephemeral=True)
+
+    @discord.ui.button(label="Voltar", style=discord.ButtonStyle.gray, custom_id="editar:voltar")
+    async def voltar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # reabre a view de gerenciamento
+        await enviar_embed_gerenciar(interaction, int(self.dono_id))
+
+    @discord.ui.button(label="Início", style=discord.ButtonStyle.gray, custom_id="editar:inicio")
+    async def inicio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🏠 Voltando ao menu inicial...", ephemeral=True)
+
+
+class GerenciarFamiliaView(discord.ui.View):
+    def __init__(self, dono_id):
+        super().__init__(timeout=None)
+        self.dono_id = dono_id
+
+    @discord.ui.button(label="✏️ Editar", style=discord.ButtonStyle.primary, custom_id="gerenciar:editar")
+    async def editar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # só o dono pode editar
+        if str(interaction.user.id) != str(self.dono_id):
+            return await interaction.response.send_message("❌ Apenas o dono pode editar.", ephemeral=True)
+        view = EditarFamiliaView(self.dono_id, self.dono_id)
+        await interaction.response.send_message(f"✏️ Editando família...", view=view, ephemeral=True)
+
+    @discord.ui.button(label="👤 Convidar", style=discord.ButtonStyle.success, custom_id="gerenciar:convidar")
+    async def convidar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Use o comando `!convidar @membro` para convidar.", ephemeral=True)
+
+    @discord.ui.button(label="👥 Membros", style=discord.ButtonStyle.blurple, custom_id="gerenciar:membros")
+    async def membros(self, interaction: discord.Interaction, button: discord.ui.Button):
+        data = carregar()
+        familia = data.get(str(self.dono_id))
+        if not familia:
+            return await interaction.response.send_message("❌ Família não encontrada.", ephemeral=True)
+        membros = "\n".join(f"<@{m}>" for m in familia["membros"])
+        await interaction.response.send_message(f"**Membros:**\n{membros}", ephemeral=True)
+
+    @discord.ui.button(label="🗑️ Excluir família", style=discord.ButtonStyle.danger, custom_id="gerenciar:excluir")
+    async def excluir(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if str(interaction.user.id) != str(self.dono_id):
+            return await interaction.response.send_message("❌ Apenas o dono pode excluir.", ephemeral=True)
+        data = carregar()
+        if str(self.dono_id) in data:
+            del data[str(self.dono_id)]
+            salvar(data)
+            return await interaction.response.send_message("🗑️ Família excluída.", ephemeral=True)
+        await interaction.response.send_message("❌ Família não encontrada.", ephemeral=True)
+
+    @discord.ui.button(label="🏠 Início", style=discord.ButtonStyle.gray, custom_id="gerenciar:inicio")
+    async def inicio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🏠 Menu inicial.", ephemeral=True)
+
+
+async def enviar_embed_gerenciar(ctx_or_interaction, dono_id):
+    """
+    Envia o embed no formato semelhante ao da imagem:
+    - Título com nome da família
+    - Status, Dono, Membros, Cargo, Tier VIP
+    - Lista de membros
+    - View com botões: Editar, Convidar, Membros, Excluir família, Início
+    """
+    data = carregar()
+    familia = data.get(str(dono_id))
+    if not familia:
+        # se for interaction
+        if isinstance(ctx_or_interaction, discord.Interaction):
+            return await ctx_or_interaction.response.send_message("❌ Família não encontrada.", ephemeral=True)
+        return await ctx_or_interaction.reply("❌ Família não encontrada.")
+
+    # campos que aparecem na imagem
+    nome = familia.get("nome", "Minha Família")
+    status = "✅ Ativa"
+    dono = familia.get("dono")
+    membros_count = len(familia.get("membros", []))
+    limite = familia.get("limite", 50)
+    cargo_name = familia.get("cargo", nome)  # se tiver cargo salvo
+    cor_hex = familia.get("cor", "#5865F2")
+    vip = familia.get("vip", "Nenhum")
+
+    # tenta converter cor hex para int; se falhar, usa cor padrão
+    try:
+        color_int = int(cor_hex.replace("#",""), 16)
+    except:
+        color_int = 0x5865F2
+
+    embed = discord.Embed(title=f"👥 **{nome}**", color=color_int)
+    embed.add_field(name="Status", value=f"{status} · Dono: <@{dono}>", inline=False)
+    embed.add_field(name="Membros", value=f"{membros_count}/{limite}", inline=True)
+    embed.add_field(name="Cargo", value=f"🏠 @{cargo_name}", inline=True)
+    embed.add_field(name="Tier VIP", value=vip, inline=True)
+
+    membros = "\n".join(f"👑 <@{m}>" if m == str(dono) else f"<@{m}>" for m in familia.get("membros", []))
+    embed.add_field(name="Membros:", value=membros or "Nenhum", inline=False)
+    embed.set_footer(text="Sistema de Famílias")
+
+    view = GerenciarFamiliaView(dono_id)
+    # enviar dependendo do tipo
+    if isinstance(ctx_or_interaction, discord.Interaction):
+        await ctx_or_interaction.response.send_message(embed=embed, view=view)
+    else:
+        await ctx_or_interaction.reply(embed=embed, view=view)
 
 # ==================== COMANDO FAMÍLIA ====================
 
@@ -357,6 +485,17 @@ async def up(ctx, tipo=None):
     )
 
     await ctx.send(embed=embed, view=PainelView())
+
+# Comando para abrir gerenciamento (novo)
+@bot.command()
+async def gerenciar(ctx):
+    # verifica se o autor tem família e pega o dono correspondente
+    data = carregar()
+    user_id = str(ctx.author.id)
+    familia = next((dono for dono, info in data.items() if user_id in info["membros"]), None)
+    if not familia:
+        return await ctx.reply("❌ Você não está em nenhuma família")
+    await enviar_embed_gerenciar(ctx, int(familia))
 
 # ==================== SLASH ====================
 @bot.tree.command(name="autorizar", description="Autorizar usuário")
