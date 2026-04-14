@@ -46,6 +46,40 @@ def salvar_autorizados(lista):
     with open(AUTORIZADOS_FILE, "w") as f:
         json.dump(lista, f, indent=4)
 
+# ==================== SISTEMA FAMÍLIA ====================
+@bot.command()
+async def familia(ctx):
+
+    autorizados = carregar_autorizados()
+
+    if not (
+        any(role.id in CARGOS_AUTORIZADOS for role in ctx.author.roles)
+        or ctx.author.guild_permissions.administrator
+        or ctx.author.id == DONO_ID
+        or ctx.author.id in autorizados
+    ):
+        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
+
+    data = carregar()
+    user_id = str(ctx.author.id)
+
+    if user_id not in data:
+        data[user_id] = {
+            "nome": "Minha Família",
+            "membros": [user_id]
+        }
+        salvar(data)
+
+    membros = "\n".join(f"<@{m}>" for m in data[user_id]["membros"])
+
+    embed = discord.Embed(
+        title="👥 Sua Família",
+        description=membros,
+        color=0x5865F2
+    )
+
+    await ctx.reply(embed=embed, mention_author=False)
+
 # ==================== SLASH ====================
 @bot.tree.command(name="autorizar", description="Autorizar usuário")
 async def autorizar(interaction: discord.Interaction, user: discord.Member):
@@ -72,7 +106,6 @@ async def on_ready():
             activity=discord.Game(name="Suporte - Tickets")
         )
 
-        # 🔥 SYNC FORÇADO (resolve slash)
         synced = await bot.tree.sync()
         print(f"🔄 {len(synced)} comandos sincronizados")
 
