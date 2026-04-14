@@ -179,32 +179,34 @@ async def on_message(message):
             await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
 
         # ==================== BLOQUEIO ====================
-      if re.search(invite_pattern, message.content):
+        invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
-    if (
-        message.author.guild_permissions.administrator
-        or message.author.id == DONO_ID
-    ):
-        return
+        if re.search(invite_pattern, message.content):
 
-    try:
-        await message.delete()
+            if (
+                message.author.guild_permissions.administrator
+                or message.author.id == DONO_ID
+            ):
+                return
 
-        await log(
-            message.guild,
-            f"⚠️ {message.author} enviou link: {message.content}"
-        )
+            try:
+                await message.delete()
 
-        await message.guild.ban(message.author, reason=MOTIVO)
+                await log(
+                    message.guild,
+                    f"⚠️ {message.author} enviou link: {message.content}"
+                )
 
-        await log(
-            message.guild,
-            f"🚫 {message.author} foi banido por divulgação"
-        )
+                await message.guild.ban(message.author, reason=MOTIVO)
 
-        return
-    except:
-        pass
+                await log(
+                    message.guild,
+                    f"🚫 {message.author} foi banido por divulgação"
+                )
+
+                return
+            except:
+                pass
 
         # ==================== COMANDOS ====================
         await bot.process_commands(message)
