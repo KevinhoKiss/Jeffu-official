@@ -205,8 +205,8 @@ async def convidar(ctx, membro: discord.Member = None):
 
     except:
         await ctx.reply("❌ Não consegui enviar DM para esse usuário")
+        
 # ==================== BOTÃO ====================
-
 class AceitarView(discord.ui.View):
     def __init__(self, dono_id):
         super().__init__(timeout=60)
@@ -248,7 +248,6 @@ class AceitarView(discord.ui.View):
 
 
 # ==================== CONVIDAR ====================
-
 @bot.command()
 async def convidar(ctx, membro: discord.Member = None):
 
