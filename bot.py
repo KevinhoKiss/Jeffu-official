@@ -934,7 +934,7 @@ async def on_message(message):
                 )
 
                 return
-            except:
+            except Exception:
                 pass
 
         # ✅ MUITO IMPORTANTE (não remover)
