@@ -53,6 +53,22 @@ if texto_limpo in saudacoes:
     await message.reply(saudacoes[texto_limpo], mention_author=False)
     return
 
+    # ==================== INTERAÇÕES COM JEFFU ====================
+
+# Amor / carinho
+padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
+
+if re.search(padrao_amor, texto):
+    await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
+    return
+
+# Mandar calar a boca / xingar
+padrao_cala_boca = r"(cala boca|calaboca|fica quieto|quieto|cbc).*(jeffu)?"
+
+if re.search(padrao_cala_boca, texto):
+    await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+    return
+    
     # ==================== BLOQUEIO DE CONVITES ====================
     invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
