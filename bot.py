@@ -12,6 +12,7 @@ except:
     MongoClient = None
 
 # ==================== CONFIG ====================
+SEU_ID_DO_SERVIDOR = 1409292663752228960
 LOG_CHANNEL_ID = 1466542559730991164
 
 intents = discord.Intents.default()
@@ -110,9 +111,14 @@ class AceitarView(discord.ui.View):
 
         convites.pop(interaction.user.id, None)
 
-        cargo = discord.utils.get(interaction.guild.roles, name="Família")
-        if cargo:
-            await interaction.user.add_roles(cargo)
+       guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
+
+if guild:
+    membro = guild.get_member(interaction.user.id)
+    cargo = discord.utils.get(guild.roles, name="Família")
+
+    if membro and cargo:
+        await membro.add_roles(cargo)
 
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
 
