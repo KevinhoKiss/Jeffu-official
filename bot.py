@@ -3,7 +3,6 @@ from discord.ext import commands
 import os
 import traceback
 import re
-from openai import OpenAI
 
 # ==================== CONFIG ====================
 intents = discord.Intents.default()
@@ -14,9 +13,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 🔴 CONFIG FIXA
 DONO_ID = 766709835701682208
 MOTIVO = "Divulgação de servidor"
-
-# 🔑 IA
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ==================== READY ====================
 @bot.event
@@ -138,29 +134,6 @@ async def on_message(message):
             mention_author=False
         )
         return
-
-    # ==================== IA ====================
-    try:
-        resposta = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "Você é um bot de suporte de Discord. Responda de forma curta, clara e útil."},
-                {"role": "user", "content": message.content}
-            ]
-        )
-
-        await message.reply(
-            resposta.choices[0].message.content,
-            mention_author=False
-        )
-
-    except Exception as e:
-        print("❌ Erro IA:", e)
-
-        await message.reply(
-            "🤖 Estou com indisponibilidade no momento... tente novamente mais tarde.",
-            mention_author=False
-        )
 
     await bot.process_commands(message)
 
