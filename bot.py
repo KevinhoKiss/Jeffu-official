@@ -857,13 +857,13 @@ async def on_message(message):
                 return
 
         # ==================== SUPORTE ====================
-    palavras_chave = [
-        "login", "senha", "esqueci", "não consigo", "acesso",
-        "nao consigo", "ajuda", "ticket", "suporte"
-    ]
+        palavras_chave = [
+            "login", "senha", "esqueci", "não consigo", "acesso",
+            "nao consigo", "ajuda", "ticket", "suporte"
+        ]
 
-    if any(p in texto for p in palavras_chave):
-        await message.reply(
+        if any(p in texto for p in palavras_chave):
+                await message.reply(
             "🔐 Para suporte, vá em <#1479642544429076500>",
             mention_author=False
         )
@@ -887,8 +887,6 @@ async def on_message(message):
             mention_author=False
         )
         return
-
-    await bot.process_commands(message)
     
         # ==================== INTERAÇÕES ====================
         if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
