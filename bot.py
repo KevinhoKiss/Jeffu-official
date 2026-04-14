@@ -407,19 +407,22 @@ async def on_message(message):
             "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
         }
 
-        for chave in saudacoes:
-            if texto_limpo.startswith(chave):
-                await message.reply(saudacoes[chave], mention_author=False)
+        if texto_limpo in saudacoes:
+            await message.reply(saudacoes[texto_limpo], mention_author=False)
+            return
 
         # ==================== INTERAÇÕES ====================
         if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
             await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
+            return
 
         if re.search(r"(te amo|amo vc|amo você).*(jeffu)?", texto):
             await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
+            return
 
         if re.search(r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?", texto):
             await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+            return
 
         # ==================== BLOQUEIO ====================
         invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
@@ -450,6 +453,12 @@ async def on_message(message):
                 return
             except:
                 pass
+
+        # ✅ MUITO IMPORTANTE (não remover)
+        await bot.process_commands(message)
+
+    except Exception as e:
+        print(f"Erro no on_message: {e}")
 
         # ==================== COMANDOS ====================
         await bot.process_commands(message)
