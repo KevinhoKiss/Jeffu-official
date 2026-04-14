@@ -41,34 +41,34 @@ async def on_message(message):
     texto = message.content.lower()
 
     # ==================== SAUDAÇÕES ====================
-saudacoes = {
-    "bom dia": "Bom diia! <:shame:1466765431137370379>  como foi sua noite? Dormiu bem?",
-    "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Ja se hidratou hoje? <:FBI:1466776866122629252>",
-    "boa noite": "Boa noite!  Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
-}
+    saudacoes = {
+        "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+        "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+        "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+    }
 
-texto_limpo = texto.strip()
+    texto_limpo = texto.strip()
 
-if texto_limpo in saudacoes:
-    await message.reply(saudacoes[texto_limpo], mention_author=False)
-    return
+    if texto_limpo in saudacoes:
+        await message.reply(saudacoes[texto_limpo], mention_author=False)
+        return
 
     # ==================== INTERAÇÕES COM JEFFU ====================
 
-# Amor / carinho
-padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
+    # Amor / carinho
+    padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
 
-if re.search(padrao_amor, texto):
-    await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
-    return
+    if re.search(padrao_amor, texto):
+        await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
+        return
 
-# Mandar calar a boca / xingar
-padrao_cala_boca = r"(cala boca|calaboca|fica quieto|quieto|cbc).*(jeffu)?"
+    # Mandar calar a boca / xingar
+    padrao_cala_boca = r"(cala boca|calaboca|fica quieto|quieto|clbc).*(jeffu)?"
 
-if re.search(padrao_cala_boca, texto):
-    await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
-    return
-    
+    if re.search(padrao_cala_boca, texto):
+        await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+        return
+
     # ==================== BLOQUEIO DE CONVITES ====================
     invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
