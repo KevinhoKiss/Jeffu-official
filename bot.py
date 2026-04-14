@@ -77,33 +77,6 @@ def salvar_autorizados(lista):
         json.dump(lista, f, indent=4)
 
 # ==================== BANCO ====================
-def carregar():
-    if not os.path.exists(ARQUIVO):
-        return {}
-    try:
-        with open(ARQUIVO, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def salvar(data):
-    with open(ARQUIVO, "w") as f:
-        json.dump(data, f, indent=4)
-
-def carregar_autorizados():
-    if not os.path.exists(AUTORIZADOS_FILE):
-        return []
-    try:
-        with open(AUTORIZADOS_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
-
-def salvar_autorizados(lista):
-    with open(AUTORIZADOS_FILE, "w") as f:
-        json.dump(lista, f, indent=4)
-
-# ==================== BOTÃO ====================
 class AceitarView(discord.ui.View):
     def __init__(self, dono_id):
         super().__init__(timeout=60)
@@ -135,7 +108,7 @@ class AceitarView(discord.ui.View):
         data[dono_id]["membros"].append(user_id)
         salvar(data)
 
-        del convites[interaction.user.id]
+        convites.pop(interaction.user.id, None)
 
         cargo = discord.utils.get(interaction.guild.roles, name="Família")
         if cargo:
@@ -147,42 +120,69 @@ class PainelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="📋 Ver Família", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(
+        label="📋 Ver Família",
+        style=discord.ButtonStyle.blurple,
+        custom_id="painel:ver"
+    )
     async def ver(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         data = carregar()
         user_id = str(interaction.user.id)
 
-        for dono, info in data.items():
-            if user_id in info["membros"]:
+        familia = next(
+            (info for info in data.values() if user_id in info["membros"]),
+            None
+        )
 
-                membros = "\n".join(f"<@{m}>" for m in info["membros"])
+        if not familia:
+            return await interaction.response.send_message(
+                "❌ Você não está em nenhuma família",
+                ephemeral=True
+            )
 
-                embed = discord.Embed(
-                    title=f"🏠 {info['nome']}",
-                    description=membros,
-                    color=0x5865F2
-                )
+        membros = "\n".join(f"<@{m}>" for m in familia["membros"])
 
-                embed.add_field(name="👑 Dono", value=f"<@{info['dono']}>")
+        embed = discord.Embed(
+            title=f"🏠 {familia['nome']}",
+            description=membros,
+            color=0x5865F2
+        )
 
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.add_field(name="👑 Dono", value=f"<@{familia['dono']}>")
 
-        await interaction.response.send_message("❌ Você não está em nenhuma família", ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="➕ Convidar", style=discord.ButtonStyle.green)
-    async def convidar_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use: !convidar @usuário", ephemeral=True)
+  @discord.ui.button(
+    label="✅ Aceitar convite",
+    style=discord.ButtonStyle.green,
+    custom_id="convite:aceitar"
+)
+async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            "Use: `!convidar @usuário`",
+            ephemeral=True
+        )
 
-    @discord.ui.button(label="🚪 Sair", style=discord.ButtonStyle.red)
+    @discord.ui.button(
+        label="🚪 Sair",
+        style=discord.ButtonStyle.red,
+        custom_id="painel:sair"
+    )
     async def sair_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         data = carregar()
         user_id = str(interaction.user.id)
 
         for dono, info in data.items():
+
             if user_id in info["membros"]:
 
-                if dono == user_id:
-                    return await interaction.response.send_message("❌ Você é o dono!", ephemeral=True)
+                if user_id == info["dono"]:
+                    return await interaction.response.send_message(
+                        "❌ Você é o dono!",
+                        ephemeral=True
+                    )
 
                 info["membros"].remove(user_id)
                 salvar(data)
@@ -191,15 +191,19 @@ class PainelView(discord.ui.View):
                 if cargo:
                     await interaction.user.remove_roles(cargo)
 
-                return await interaction.response.send_message("👋 Você saiu da família!", ephemeral=True)
+                return await interaction.response.send_message(
+                    "👋 Você saiu da família!",
+                    ephemeral=True
+                )
 
-        await interaction.response.send_message("❌ Você não está em nenhuma família", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Você não está em nenhuma família",
+            ephemeral=True
+        )
         
 # ==================== SISTEMA FAMÍLIA COMPLETO ====================
 
 import time
-
-convites = {}
 
 # ==================== COMANDO FAMÍLIA ====================
 
@@ -301,17 +305,21 @@ async def sair(ctx):
 @bot.command()
 async def expulsar(ctx, membro: discord.Member):
     data = carregar()
-    dono_id = str(ctx.author.id)
+    user_id = str(ctx.author.id)
+    alvo_id = str(membro.id)
 
-    if dono_id not in data:
+    familia = data.get(user_id)
+
+    if not familia:
         return await ctx.reply("❌ Você não tem família")
 
-    user_id = str(membro.id)
+    if alvo_id not in familia["membros"]:
+        return await ctx.reply("❌ Esse usuário não está na sua família")
 
-    if user_id not in data[dono_id]["membros"]:
-        return await ctx.reply("❌ Esse usuário não está na família")
+    if alvo_id == user_id:
+        return await ctx.reply("❌ Você não pode expulsar a si mesmo")
 
-    data[dono_id]["membros"].remove(user_id)
+    familia["membros"].remove(alvo_id)
     salvar(data)
 
     await ctx.reply(f"🚫 {membro.mention} foi expulso")
