@@ -847,13 +847,49 @@ async def on_message(message):
         saudacoes = {
             "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
             "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
+            "site caiu": "Da uma olhada em <#1409296003034644542> <#1409296003034644542>"
         }
 
         for chave in saudacoes:
             if texto_limpo.startswith(chave):
                 await message.reply(saudacoes[chave], mention_author=False)
                 return
+
+        # ==================== SUPORTE ====================
+    palavras_chave = [
+        "login", "senha", "esqueci", "não consigo", "acesso",
+        "nao consigo", "ajuda", "ticket", "suporte"
+    ]
+
+    if any(p in texto for p in palavras_chave):
+        await message.reply(
+            "🔐 Para suporte, vá em <#1479642544429076500>",
+            mention_author=False
+        )
+        return
+
+    # ==================== QUEDA DO SITE ====================
+    frases_site = [
+        "o site caiu",
+        "site caiu",
+        "site tá fora",
+        "site ta fora",
+        "site offline",
+        "site não funciona",
+        "site nao funciona",
+        "site saiu do ar"
+    ]
+
+    if any(frase in texto for frase in frases_site):
+        await message.reply(
+            "🌐 Veja em <#1409296003034644542>",
+            mention_author=False
+        )
+        return
+
+    await bot.process_commands(message)
+    
         # ==================== INTERAÇÕES ====================
         if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
             await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
