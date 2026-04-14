@@ -51,6 +51,12 @@ async def on_message(message):
 
     # ==================== INTERAÇÕES COM JEFFU ====================
 
+        # Agradecimento
+    padrao_agradecimento = r"(agradecido|obg|obrigado).*(jeffu)?"
+    if re.search(padrao_agradecimento, texto):
+        await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
+        return
+        
     # Amor / carinho
     padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
     if re.search(padrao_amor, texto):
