@@ -102,8 +102,13 @@ def carregar_autorizados():
 def salvar_autorizados(lista):
     with open(AUTORIZADOS_FILE, "w") as f:
         json.dump(lista, f, indent=4)
+# ==================== SISTEMA FAMÍLIA COMPLETO ====================
 
-# ==================== SISTEMA FAMÍLIA ====================
+import time
+
+convites = {}
+
+# ==================== COMANDO FAMÍLIA ====================
 
 @bot.command()
 async def familia(ctx):
@@ -121,17 +126,10 @@ async def familia(ctx):
     data = carregar()
     user_id = str(ctx.author.id)
 
-    # Mongo (opcional)
-    if mongo:
-        familias_db.update_one(
-            {"user": user_id},
-            {"$setOnInsert": {"nome": "Minha Família", "membros": [user_id]}},
-            upsert=True
-        )
-
     if user_id not in data:
         data[user_id] = {
             "nome": "Minha Família",
+            "dono": user_id,
             "membros": [user_id]
         }
         salvar(data)
@@ -139,7 +137,7 @@ async def familia(ctx):
     membros = "\n".join(f"<@{m}>" for m in data[user_id]["membros"])
 
     embed = discord.Embed(
-        title="👥 Sua Família",
+        title=f"👥 {data[user_id]['nome']}",
         description=membros,
         color=0x5865F2
     )
@@ -147,7 +145,7 @@ async def familia(ctx):
     await ctx.reply(embed=embed, mention_author=False)
 
 
-# ==================== BOTÃO DE CONVITE ====================
+# ==================== BOTÃO ====================
 
 class AceitarView(discord.ui.View):
     def __init__(self, dono_id):
@@ -157,8 +155,17 @@ class AceitarView(discord.ui.View):
     @discord.ui.button(label="✅ Aceitar convite", style=discord.ButtonStyle.green)
     async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
 
+        if interaction.user.id not in convites:
+            return await interaction.response.send_message("❌ Convite inválido", ephemeral=True)
+
+        convite = convites[interaction.user.id]
+
+        if time.time() - convite["tempo"] > 60:
+            del convites[interaction.user.id]
+            return await interaction.response.send_message("⏰ Convite expirou", ephemeral=True)
+
+        dono_id = str(convite["dono"])
         user_id = str(interaction.user.id)
-        dono_id = str(self.dono_id)
 
         data = carregar()
 
@@ -171,6 +178,8 @@ class AceitarView(discord.ui.View):
         data[dono_id]["membros"].append(user_id)
         salvar(data)
 
+        del convites[interaction.user.id]
+
         cargo = discord.utils.get(interaction.guild.roles, name="Família")
         if cargo:
             await interaction.user.add_roles(cargo)
@@ -178,7 +187,7 @@ class AceitarView(discord.ui.View):
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
 
 
-# ==================== COMANDO CONVIDAR ====================
+# ==================== CONVIDAR ====================
 
 @bot.command()
 async def convidar(ctx, membro: discord.Member):
@@ -193,11 +202,16 @@ async def convidar(ctx, membro: discord.Member):
     ):
         return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
 
+    convites[membro.id] = {
+        "dono": ctx.author.id,
+        "tempo": time.time()
+    }
+
     view = AceitarView(ctx.author.id)
 
     try:
         await membro.send(
-            f"📩 Você foi convidado para uma família por {ctx.author.mention}",
+            f"📩 Convite para a família de {ctx.author.mention} (expira em 60s)",
             view=view
         )
 
@@ -205,6 +219,76 @@ async def convidar(ctx, membro: discord.Member):
 
     except:
         await ctx.reply("❌ Não consegui enviar DM para esse usuário")
+
+
+# ==================== SAIR ====================
+
+@bot.command()
+async def sair(ctx):
+    data = carregar()
+    user_id = str(ctx.author.id)
+
+    for dono, info in data.items():
+        if user_id in info["membros"]:
+
+            if dono == user_id:
+                return await ctx.reply("❌ Você é o dono! Não pode sair.")
+
+            info["membros"].remove(user_id)
+            salvar(data)
+
+            return await ctx.reply("👋 Você saiu da família!")
+
+    await ctx.reply("❌ Você não está em nenhuma família")
+
+
+# ==================== EXPULSAR ====================
+
+@bot.command()
+async def expulsar(ctx, membro: discord.Member):
+    data = carregar()
+    dono_id = str(ctx.author.id)
+
+    if dono_id not in data:
+        return await ctx.reply("❌ Você não tem família")
+
+    if data[dono_id]["dono"] != dono_id:
+        return await ctx.reply("❌ Apenas o dono pode expulsar")
+
+    user_id = str(membro.id)
+
+    if user_id not in data[dono_id]["membros"]:
+        return await ctx.reply("❌ Esse usuário não está na família")
+
+    data[dono_id]["membros"].remove(user_id)
+    salvar(data)
+
+    await ctx.reply(f"🚫 {membro.mention} foi expulso")
+
+
+# ==================== PAINEL ====================
+
+@bot.command()
+async def painel(ctx):
+    data = carregar()
+    user_id = str(ctx.author.id)
+
+    for dono, info in data.items():
+        if user_id in info["membros"]:
+
+            membros = "\n".join(f"<@{m}>" for m in info["membros"])
+
+            embed = discord.Embed(
+                title=f"🏠 {info['nome']}",
+                description=membros,
+                color=0x5865F2
+            )
+
+            embed.add_field(name="👑 Dono", value=f"<@{info['dono']}>")
+
+            return await ctx.reply(embed=embed)
+
+    await ctx.reply("❌ Você não está em nenhuma família")
 
 # ==================== SLASH ====================
 @bot.tree.command(name="autorizar", description="Autorizar usuário")
