@@ -32,13 +32,76 @@ CARGOS_AUTORIZADOS = [
 ARQUIVO = "familias.json"
 AUTORIZADOS_FILE = "autorizados.json"
 
-convites = {}  # 🔥 SÓ UMA VEZ
+convites = {}  # ✅ só uma vez
 
-# ==================== FUNÇÃO DE LOG ====================
+# ==================== LOG ====================
 async def log(guild, mensagem):
     canal = guild.get_channel(LOG_CHANNEL_ID)
     if canal:
         await canal.send(mensagem)
+
+# ==================== MONGO ====================
+mongo = None
+try:
+    mongo = MongoClient(os.getenv("MONGO_URI"))
+    db = mongo["bot"]
+    familias_db = db["familias"]
+except:
+    mongo = None
+
+# ==================== JSON ====================
+def carregar():
+    if not os.path.exists(ARQUIVO):
+        return {}
+    try:
+        with open(ARQUIVO, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def salvar(data):
+    with open(ARQUIVO, "w") as f:
+        json.dump(data, f, indent=4)
+
+def carregar_autorizados():
+    if not os.path.exists(AUTORIZADOS_FILE):
+        return []
+    try:
+        with open(AUTORIZADOS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def salvar_autorizados(lista):
+    with open(AUTORIZADOS_FILE, "w") as f:
+        json.dump(lista, f, indent=4)
+
+# ==================== BANCO ====================
+def carregar():
+    if not os.path.exists(ARQUIVO):
+        return {}
+    try:
+        with open(ARQUIVO, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def salvar(data):
+    with open(ARQUIVO, "w") as f:
+        json.dump(data, f, indent=4)
+
+def carregar_autorizados():
+    if not os.path.exists(AUTORIZADOS_FILE):
+        return []
+    try:
+        with open(AUTORIZADOS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def salvar_autorizados(lista):
+    with open(AUTORIZADOS_FILE, "w") as f:
+        json.dump(lista, f, indent=4)
 
 # ==================== BOTÃO ====================
 class AceitarView(discord.ui.View):
@@ -80,41 +143,6 @@ class AceitarView(discord.ui.View):
 
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
         
-# ==================== MONGO (NOVO) ====================
-mongo = None
-try:
-    mongo = MongoClient(os.getenv("MONGO_URI"))
-    db = mongo["bot"]
-    familias_db = db["familias"]
-except:
-    mongo = None
-
-# ==================== BANCO ====================
-def carregar():
-    if not os.path.exists(ARQUIVO):
-        return {}
-    try:
-        with open(ARQUIVO, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def salvar(data):
-    with open(ARQUIVO, "w") as f:
-        json.dump(data, f, indent=4)
-
-def carregar_autorizados():
-    if not os.path.exists(AUTORIZADOS_FILE):
-        return []
-    try:
-        with open(AUTORIZADOS_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
-
-def salvar_autorizados(lista):
-    with open(AUTORIZADOS_FILE, "w") as f:
-        json.dump(lista, f, indent=4)
 # ==================== SISTEMA FAMÍLIA COMPLETO ====================
 
 import time
@@ -154,22 +182,10 @@ async def familia(ctx):
         color=0x5865F2
     )
 
-    embed.add_field(
-        name="👑 Dono",
-        value=f"<@{data[user_id]['dono']}>",
-        inline=False
-    )
+    embed.add_field(name="👑 Dono", value=f"<@{data[user_id]['dono']}>", inline=False)
+    embed.add_field(name=f"👥 Membros ({len(data[user_id]['membros'])})", value=membros, inline=False)
 
-    embed.add_field(
-        name=f"👥 Membros ({len(data[user_id]['membros'])})",
-        value=membros,
-        inline=False
-    )
-
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
-    embed.timestamp = discord.utils.utcnow()
-
-    await ctx.reply(embed=embed, mention_author=False)
+    await ctx.reply(embed=embed)
     
 # ==================== PROTEÇÃO CONTRA CRASH ====================
 @bot.command()
@@ -205,47 +221,6 @@ async def convidar(ctx, membro: discord.Member = None):
 
     except:
         await ctx.reply("❌ Não consegui enviar DM para esse usuário")
-        
-# ==================== BOTÃO ====================
-class AceitarView(discord.ui.View):
-    def __init__(self, dono_id):
-        super().__init__(timeout=60)
-        self.dono_id = dono_id
-
-    @discord.ui.button(label="✅ Aceitar convite", style=discord.ButtonStyle.green)
-    async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        if interaction.user.id not in convites:
-            return await interaction.response.send_message("❌ Convite inválido", ephemeral=True)
-
-        convite = convites[interaction.user.id]
-
-        if time.time() - convite["tempo"] > 60:
-            del convites[interaction.user.id]
-            return await interaction.response.send_message("⏰ Convite expirou", ephemeral=True)
-
-        dono_id = str(convite["dono"])
-        user_id = str(interaction.user.id)
-
-        data = carregar()
-
-        if dono_id not in data:
-            return await interaction.response.send_message("❌ Família não existe", ephemeral=True)
-
-        if user_id in data[dono_id]["membros"]:
-            return await interaction.response.send_message("❌ Você já está na família", ephemeral=True)
-
-        data[dono_id]["membros"].append(user_id)
-        salvar(data)
-
-        del convites[interaction.user.id]
-
-        cargo = discord.utils.get(interaction.guild.roles, name="Família")
-        if cargo:
-            await interaction.user.add_roles(cargo)
-
-        await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
-
 
 # ==================== CONVIDAR ====================
 @bot.command()
@@ -294,7 +269,7 @@ async def sair(ctx):
         if user_id in info["membros"]:
 
             if dono == user_id:
-                return await ctx.reply("❌ Você é o dono! Não pode sair.")
+                return await ctx.reply("❌ Você é o dono!")
 
             info["membros"].remove(user_id)
             salvar(data)
@@ -313,9 +288,6 @@ async def expulsar(ctx, membro: discord.Member):
 
     if dono_id not in data:
         return await ctx.reply("❌ Você não tem família")
-
-    if data[dono_id]["dono"] != dono_id:
-        return await ctx.reply("❌ Apenas o dono pode expulsar")
 
     user_id = str(membro.id)
 
