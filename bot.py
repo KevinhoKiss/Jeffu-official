@@ -39,6 +39,7 @@ async def on_message(message):
 
     print(f"📨 {message.author}: {message.content}")
     texto = message.content.lower()
+    texto_limpo = texto.strip()
 
     # ==================== SAUDAÇÕES ====================
     saudacoes = {
@@ -47,24 +48,21 @@ async def on_message(message):
         "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
     }
 
-    texto_limpo = texto.strip()
-
-    if texto_limpo in saudacoes:
-        await message.reply(saudacoes[texto_limpo], mention_author=False)
-        return
+    for chave in saudacoes:
+        if texto_limpo.startswith(chave):
+            await message.reply(saudacoes[chave], mention_author=False)
+            return
 
     # ==================== INTERAÇÕES COM JEFFU ====================
 
     # Amor / carinho
     padrao_amor = r"(te amo|amo vc|amo você).*(jeffu)?"
-
     if re.search(padrao_amor, texto):
         await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
         return
 
     # Mandar calar a boca / xingar
-    padrao_cala_boca = r"(cala boca|calaboca|fica quieto|quieto|clbc).*(jeffu)?"
-
+    padrao_cala_boca = r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?"
     if re.search(padrao_cala_boca, texto):
         await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
         return
@@ -158,6 +156,11 @@ async def on_message(message):
 
     except Exception as e:
         print("❌ Erro IA:", e)
+
+        await message.reply(
+            "🤖 Estou com indisponibilidade no momento... tente novamente mais tarde.",
+            mention_author=False
+        )
 
     await bot.process_commands(message)
 
