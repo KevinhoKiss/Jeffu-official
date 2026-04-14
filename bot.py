@@ -4,7 +4,10 @@ import os
 import traceback
 import re
 import json
-from pymongo import MongoClient
+try:
+    from pymongo import MongoClient
+except:
+    MongoClient = None
 
 # ==================== CONFIG ====================
 intents = discord.Intents.default()
