@@ -10,6 +10,8 @@ except:
     MongoClient = None
 
 # ==================== CONFIG ====================
+LOG_CHANNEL_ID = 1466542559730991164  # seu canal de log
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -27,6 +29,12 @@ CARGOS_AUTORIZADOS = [
 
 ARQUIVO = "familias.json"
 AUTORIZADOS_FILE = "autorizados.json"
+
+# ==================== FUNÇÃO DE LOG ====================
+async def log(guild, mensagem):
+    canal = guild.get_channel(LOG_CHANNEL_ID)
+    if canal:
+        await canal.send(mensagem)
 
 # ==================== MONGO (NOVO) ====================
 mongo = None
@@ -171,23 +179,32 @@ async def on_message(message):
             await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
 
         # ==================== BLOQUEIO ====================
-        invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
+      if re.search(invite_pattern, message.content):
 
-        if re.search(invite_pattern, message.content):
+    if (
+        message.author.guild_permissions.administrator
+        or message.author.id == DONO_ID
+    ):
+        return
 
-            # 🔥 PROTEÇÃO NOVA (não bane admin/dono)
-            if (
-                message.author.guild_permissions.administrator
-                or message.author.id == DONO_ID
-            ):
-                return
+    try:
+        await message.delete()
 
-            try:
-                await message.delete()
-                await message.guild.ban(message.author, reason=MOTIVO)
-                return
-            except:
-                pass
+        await log(
+            message.guild,
+            f"⚠️ {message.author} enviou link: {message.content}"
+        )
+
+        await message.guild.ban(message.author, reason=MOTIVO)
+
+        await log(
+            message.guild,
+            f"🚫 {message.author} foi banido por divulgação"
+        )
+
+        return
+    except:
+        pass
 
         # ==================== COMANDOS ====================
         await bot.process_commands(message)
