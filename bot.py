@@ -142,6 +142,58 @@ class AceitarView(discord.ui.View):
             await interaction.user.add_roles(cargo)
 
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
+
+class PainelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="📋 Ver Família", style=discord.ButtonStyle.blurple)
+    async def ver(self, interaction: discord.Interaction, button: discord.ui.Button):
+        data = carregar()
+        user_id = str(interaction.user.id)
+
+        for dono, info in data.items():
+            if user_id in info["membros"]:
+
+                membros = "\n".join(f"<@{m}>" for m in info["membros"])
+
+                embed = discord.Embed(
+                    title=f"🏠 {info['nome']}",
+                    description=membros,
+                    color=0x5865F2
+                )
+
+                embed.add_field(name="👑 Dono", value=f"<@{info['dono']}>")
+
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        await interaction.response.send_message("❌ Você não está em nenhuma família", ephemeral=True)
+
+    @discord.ui.button(label="➕ Convidar", style=discord.ButtonStyle.green)
+    async def convidar_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Use: !convidar @usuário", ephemeral=True)
+
+    @discord.ui.button(label="🚪 Sair", style=discord.ButtonStyle.red)
+    async def sair_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        data = carregar()
+        user_id = str(interaction.user.id)
+
+        for dono, info in data.items():
+            if user_id in info["membros"]:
+
+                if dono == user_id:
+                    return await interaction.response.send_message("❌ Você é o dono!", ephemeral=True)
+
+                info["membros"].remove(user_id)
+                salvar(data)
+
+                cargo = discord.utils.get(interaction.guild.roles, name="Família")
+                if cargo:
+                    await interaction.user.remove_roles(cargo)
+
+                return await interaction.response.send_message("👋 Você saiu da família!", ephemeral=True)
+
+        await interaction.response.send_message("❌ Você não está em nenhuma família", ephemeral=True)
         
 # ==================== SISTEMA FAMÍLIA COMPLETO ====================
 
@@ -289,6 +341,19 @@ async def painel(ctx):
 
     await ctx.reply("❌ Você não está em nenhuma família")
 
+@bot.command()
+async def up(ctx, tipo=None):
+    if tipo != "painel":
+        return await ctx.reply("❌ Use: !up painel")
+
+    embed = discord.Embed(
+        title="🏠 Sistema de Família",
+        description="Use os botões abaixo 👇",
+        color=0x5865F2
+    )
+
+    await ctx.send(embed=embed, view=PainelView())
+
 # ==================== SLASH ====================
 @bot.tree.command(name="autorizar", description="Autorizar usuário")
 async def autorizar(interaction: discord.Interaction, user: discord.Member):
@@ -308,6 +373,7 @@ async def autorizar(interaction: discord.Interaction, user: discord.Member):
 @bot.event
 async def on_ready():
     print(f'✅ Bot {bot.user} conectado!')
+    bot.add_view(PainelView())
 
     try:
         await bot.change_presence(
