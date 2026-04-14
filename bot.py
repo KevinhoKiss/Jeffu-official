@@ -111,7 +111,7 @@ async def on_message(message):
 
     if any(p in texto for p in palavras_chave):
         await message.reply(
-            "🔐 Para suporte, vá em <#1479642544429076500>",
+            "🔐 Para suporte relacionado ao site, vá em <#1479642544429076500>",
             mention_author=False
         )
         return
