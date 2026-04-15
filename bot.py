@@ -876,6 +876,24 @@ async def on_message(message):
             await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
             return
 
+        # ==================== SUGESTÕES DE OBRAS ====================
+        frases_obras = [
+            "sugestão",
+            "sugestões",
+            "coloca",
+            "colocar",
+            "adicionar",
+            "adiciona"
+        ]
+
+        if any(frase in texto for frase in frases_obras):
+            await message.reply(
+                "📚 Sugestões de obras é em <#1466087941506990171>",
+                mention_author=False
+            )
+            return
+
+        
         # ==================== SUPORTE ====================
         palavras_chave = [
             "login", "senha", "esqueci", "não consigo", "acesso",
