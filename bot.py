@@ -876,6 +876,36 @@ async def on_message(message):
             await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
             return
 
+        # ==================== CAPÍTULOS FALTANDO ====================
+        frases_capitulos = [
+            "faltando",
+            "faltam",
+            "capítulos",
+            "capitulo",
+            "capítulos sumiram",
+            "faltando capitulo",
+            "não tem capítulos",
+            "nao tem capitulos",
+            "cadê os capítulos",
+            "cade os capitulos",
+            "onde estão os capítulos",
+            "onde estao os capitulos",
+            "faltando capítulos",
+            "faltam capítulos",
+            "capitulos desorganizados",
+            "capítulos desorganizados",
+            "erro",
+            "erros"
+        ]
+
+        if any(frase in texto for frase in frases_capitulos):
+            await message.reply(
+                "❌Envie em <#1452799882149761144>",
+                mention_author=False
+            )
+            return
+
+        
         # ==================== SUGESTÕES DE OBRAS ====================
         frases_obras = [
             "sugestão",
