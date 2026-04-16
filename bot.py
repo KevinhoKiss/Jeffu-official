@@ -878,10 +878,11 @@ async def on_ready():
     except Exception:
         traceback.print_exc()
 
-# ==================== MENSAGENS (on_message) ====================
+# ==================== MENSAGENS (on_message) sem IA ====================
 @bot.event
 async def on_message(message):
     try:
+        # evita responder a si mesmo ou a outros bots
         if message.author.bot:
             return
 
@@ -893,72 +894,28 @@ async def on_message(message):
         if not message.content and message.embeds:
             return
 
-        # if channel name is "erro", skip automatic replies but allow commands
+        # sempre processa comandos (prefixo "!")
+        # mas só responde automaticamente a mensagens "direcionadas" ao bot para interações casuais
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        mentions_bot = bot.user in message.mentions
+
+        # se o canal for chamado "erro", não envie respostas automáticas (apenas comandos)
         channel_name = getattr(message.channel, "name", "")
         if channel_name and channel_name.lower() == "erro":
             await bot.process_commands(message)
             return
 
-        print(f"📨 {message.author}: {message.content}")
-        texto = message.content.lower()
-        texto_limpo = texto.strip()
+        # registra para debug
+        print(f"📨 {message.author} ({'DM' if is_dm else channel_name}): {message.content}")
 
-        # SAUDAÇÕES
-        saudacoes = {
-            "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-            "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
-        }
-        for chave in saudacoes:
-            if texto_limpo.startswith(chave):
-                await message.reply(saudacoes[chave], mention_author=False)
-                return
+        texto = (message.content or "").lower().strip()
 
-        # INTERAÇÕES
-        if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
-            await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
-            return
-
-        if re.search(r"(te amo|amo vc|amo você).*(jeffu)?", texto):
-            await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
-            return
-
-        if re.search(r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?", texto):
-            await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
-            return
-
-        # SUPORTE
-        palavras_chave = ["login", "senha", "esqueci", "não consigo", "acesso", "nao consigo", "ajuda", "ticket", "suporte"]
-        if any(p in texto for p in palavras_chave):
-            await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
-            return
-
-        # QUEDA DO SITE
-        frases_site = ["o site caiu", "site caiu", "site tá fora", "site ta fora", "site offline", "site não funciona", "site nao funciona", "site saiu do ar"]
-        if any(frase in texto for frase in frases_site):
-            await message.reply("🌐 Veja em <#1409296003034644542>", mention_author=False)
-            return
-
-        # SUGESTÕES DE OBRAS
-        frases_obras = ["sugestão", "sugestões", "sugestão de obras", "sugestões de obras", "indicação de obra", "indicações de obras", "obras sugeridas", "obras recomendadas"]
-        if any(frase in texto for frase in frases_obras):
-            await message.reply("📚 Sugestões de obras é em <#1466087941506990171>", mention_author=False)
-            return
-
-        # CAPÍTULOS FALTANDO -> responde com canal específico
-        frases_capitulos = [
-            "faltando capítulos", "faltam capítulos", "capítulos faltando", "capitulo faltando", "capítulos sumiram",
-            "faltando capitulo", "não tem capítulos", "nao tem capitulos", "cadê os capítulos", "cade os capitulos",
-            "onde estão os capítulos", "onde estao os capitulos"
-        ]
-        if any(frase in texto for frase in frases_capitulos):
-            await message.reply("<#1452799882149761144>", mention_author=False)
-            return
-
-        # BLOQUEIO DE INVITES
+        # --- BLOQUEIO DE INVITES (mantém comportamento atual) ---
         invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
         if re.search(invite_pattern, message.content):
+            # permite admins/dono
             if (message.author.guild_permissions.administrator or message.author.id == DONO_ID):
+                await bot.process_commands(message)
                 return
             try:
                 await message.delete()
@@ -970,7 +927,60 @@ async def on_message(message):
                 print("[BLOQUEIO WARN] Erro ao processar invite:", e)
                 pass
 
-        # processa comandos normalmente
+        # --- REGRAS QUE DEVEM RODAR SEMPRE (mesmo sem menção) ---
+        palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
+        if any(p in texto for p in palavras_chave):
+            await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
+            return
+
+        frases_site = ["o site caiu", "site caiu", "site tá fora", "site ta fora", "site offline", "site não funciona", "site nao funciona", "site saiu do ar"]
+        if any(frase in texto for frase in frases_site):
+            await message.reply("🌐 Veja em <#1409296003034644542>", mention_author=False)
+            return
+
+        frases_obras = ["sugestão de obra", "sugestões de obra", "sugestão de obras", "sugestões de obras", "indicação de obra", "indicações de obras", "obras sugeridas", "obras recomendadas"]
+        if any(frase in texto for frase in frases_obras):
+            await message.reply("📚 Sugestões de obras é em <#1466087941506990171>", mention_author=False)
+            return
+
+        frases_capitulos = [
+            "faltando capítulos", "faltam capítulos", "capítulos faltando", "capitulo faltando", "capítulos sumiram",
+            "faltando capitulo", "não tem capítulos", "nao tem capitulos", "cadê os capítulos", "cade os capitulos",
+            "onde estão os capítulos", "onde estao os capitulos"
+        ]
+        if any(frase in texto for frase in frases_capitulos):
+            await message.reply("<#1452799882149761144>", mention_author=False)
+            return
+
+        # --- INTERAÇÕES que devem ocorrer apenas quando a mensagem for dirigida ao bot ---
+        should_respond_personal = is_dm or mentions_bot
+
+        if should_respond_personal:
+            # SAUDAÇÕES
+            saudacoes = {
+                "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+                "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+                "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+            }
+            for chave in saudacoes:
+                if texto.startswith(chave) or (mentions_bot and chave in texto):
+                    await message.reply(saudacoes[chave], mention_author=False)
+                    return
+
+            # INTERAÇÕES
+            if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
+                await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
+                return
+
+            if re.search(r"(te amo|amo vc|amo você).*(jeffu)?", texto):
+                await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
+                return
+
+            if re.search(r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?", texto):
+                await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+                return
+
+        # processa comandos normalmente (sempre)
         await bot.process_commands(message)
 
     except Exception as e:
