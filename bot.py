@@ -86,22 +86,72 @@ def salvar_autorizados(lista):
         json.dump(lista, f, indent=4, ensure_ascii=False)
 
 # ==================== UTILITÁRIOS DE CARGO ====================
-async def get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
+# Lista de permissões permitidas para donos editarem (nomes conforme discord.Permissions)
+ALLOWED_PERMS = {
+    "administrator", "manage_guild", "manage_roles", "manage_channels", "kick_members",
+    "ban_members", "manage_messages", "manage_nicknames", "manage_emojis", "manage_webhooks",
+    "view_audit_log", "view_guild_insights", "mention_everyone", "manage_threads",
+    "create_instant_invite", "change_nickname", "send_messages", "embed_links",
+    "attach_files", "read_message_history", "use_external_emojis", "add_reactions",
+    "connect", "speak", "stream", "mute_members", "deafen_members"
+}
+
+async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
     """
-    Procura um cargo pelo nome; se não existir, cria.
-    Retorna o objeto Role ou None em caso de falha.
+    Versão segura e com logs para criar/obter um cargo.
+    - Verifica permissões do bot.
+    - Loga erros em vez de engoli-los.
+    - Tenta reutilizar cargo existente antes de criar.
     """
     try:
-        role = discord.utils.get(guild.roles, name=role_name)
-        if role:
+        # debug básico
+        try:
+            print(f"[ROLE DEBUG] Guild: {guild} | Bot user: {guild.me} | Bot perms: {guild.me.guild_permissions}")
+        except Exception as e:
+            print("[ROLE DEBUG] Falha ao obter guild.me:", e)
+
+        # checa permissão Manage Roles
+        try:
+            if not guild.me.guild_permissions.manage_roles:
+                print("[ROLE ERROR] Bot não tem Manage Roles no servidor.")
+                return None
+        except Exception as e:
+            print("[ROLE ERROR] Erro ao checar permissões:", e)
+            return None
+
+        # tenta reutilizar role existente pelo nome
+        try:
+            role = discord.utils.get(guild.roles, name=role_name)
+            if role:
+                # tenta atualizar cor se fornecida
+                if color_int is not None:
+                    try:
+                        await role.edit(colour=discord.Colour(color_int))
+                    except Exception as e:
+                        print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
+                print(f"[ROLE OK] Reutilizando role existente: {role.name} (id={role.id})")
+                return role
+        except Exception as e:
+            print("[ROLE ERROR] Erro ao procurar role existente:", e)
+
+        # cria novo role
+        try:
+            if color_int is not None:
+                role = await guild.create_role(name=role_name, colour=discord.Colour(color_int), reason="Criado pelo sistema de famílias")
+            else:
+                role = await guild.create_role(name=role_name, reason="Criado pelo sistema de famílias")
+            print(f"[ROLE OK] Role criado: {role} (id={role.id})")
             return role
-        # cria o cargo (bot precisa de Manage Roles)
-        if color_int is not None:
-            role = await guild.create_role(name=role_name, colour=discord.Colour(color_int), reason="Criado pelo sistema de famílias")
-        else:
-            role = await guild.create_role(name=role_name, reason="Criado pelo sistema de famílias")
-        return role
-    except Exception:
+        except discord.Forbidden:
+            print("[ROLE ERROR] Forbidden: bot não pode criar/editar roles (hierarquia ou permissão).")
+        except discord.HTTPException as e:
+            print("[ROLE ERROR] HTTPException ao criar role:", e)
+        except Exception as e:
+            print("[ROLE ERROR] Erro inesperado ao criar role:", e)
+        return None
+
+    except Exception as e:
+        print("[ROLE ERROR] Erro inesperado em safe_get_or_create_role:", e)
         return None
 
 async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membros_list: list):
@@ -113,16 +163,47 @@ async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membro
             membro = guild.get_member(int(m_id))
             if membro and role not in membro.roles:
                 await membro.add_roles(role)
-        except Exception:
+        except Exception as e:
+            print(f"[ROLE APPLY WARN] Falha ao aplicar role a {m_id}: {e}")
             pass
+
+def build_permissions_from_list(perms_list):
+    """
+    Recebe lista de nomes de permissões (strings) e retorna discord.Permissions com essas flags True.
+    Apenas usa nomes presentes em ALLOWED_PERMS.
+    """
+    perms = discord.Permissions.none()
+    for name in perms_list:
+        n = name.strip().lower()
+        if n in ALLOWED_PERMS:
+            try:
+                setattr(perms, n, True)
+            except Exception:
+                # algumas flags podem não ser setáveis diretamente; ignore se falhar
+                pass
+    return perms
+
+async def aplicar_permissoes_ao_role(role: discord.Role, perms_list):
+    """
+    Aplica as permissões (lista de strings) ao role.
+    """
+    try:
+        perms = build_permissions_from_list(perms_list)
+        await role.edit(permissions=perms)
+        print(f"[ROLE OK] Permissões aplicadas ao role {role.name}: {perms_list}")
+    except discord.Forbidden:
+        print("[ROLE ERROR] Forbidden: bot não pode editar permissões do role (hierarquia ou permissão).")
+    except Exception as e:
+        print("[ROLE ERROR] Erro ao aplicar permissões ao role:", e)
 
 async def atualizar_ou_criar_role_da_familia(dono_key: str):
     """
     Garante que exista um cargo para a família dono_key.
-    - Usa familia['nome'] como nome do cargo.
+    - Usa familia['nome'] como nome do cargo (com prefixo para evitar colisões).
     - Usa familia['cor'] (HEX) para definir cor do cargo se for HEX.
     - Salva role_id em familias.json.
     - Aplica o cargo a todos os membros.
+    - Aplica permissões salvas em familia['permissoes'] se houver.
     """
     data = carregar()
     familia = data.get(str(dono_key))
@@ -131,15 +212,20 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
 
     guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
     if not guild:
+        print("[ROLE ERROR] Guild não encontrado com SEU_ID_DO_SERVIDOR.")
         return None
 
     nome_familia = familia.get("nome", "Minha Família")
+    # prefixo para evitar colisões
+    role_display_name = f"Família • {nome_familia}"
+
     cor_value = familia.get("cor", None)  # pode ser "#5865F2" ou nome
     color_int = None
     if isinstance(cor_value, str) and cor_value.startswith("#"):
         try:
             color_int = int(cor_value.replace("#", ""), 16)
-        except:
+        except Exception as e:
+            print("[ROLE WARN] HEX inválido em familia['cor']:", e)
             color_int = None
 
     # tenta usar role_id salvo
@@ -148,33 +234,57 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
     if role_id:
         try:
             role = guild.get_role(int(role_id))
-        except:
+        except Exception as e:
+            print("[ROLE WARN] role_id salvo não encontrado no guild:", e)
             role = None
 
     # se role existe mas nome mudou, tenta renomear
     if role:
         try:
-            if role.name != nome_familia:
-                await role.edit(name=nome_familia)
-        except Exception:
-            pass
+            if role.name != role_display_name:
+                await role.edit(name=role_display_name)
+        except Exception as e:
+            print("[ROLE WARN] Não foi possível renomear role existente:", e)
         # atualiza cor se possível
         if color_int is not None:
             try:
                 await role.edit(colour=discord.Colour(color_int))
-            except Exception:
-                pass
+            except Exception as e:
+                print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
     else:
-        # procura por cargo com mesmo nome (reutiliza se achar)
-        role = discord.utils.get(guild.roles, name=nome_familia)
-        if not role:
-            role = await get_or_create_role(guild, nome_familia, color_int)
+        # procura por cargo com mesmo nome (reutiliza se achar) ou cria com safe_get_or_create_role
+        try:
+            role = discord.utils.get(guild.roles, name=role_display_name)
+            if not role:
+                role = await safe_get_or_create_role(guild, role_display_name, color_int)
+            else:
+                # se encontrou pelo nome, tenta ajustar cor
+                if color_int is not None:
+                    try:
+                        await role.edit(colour=discord.Colour(color_int))
+                    except Exception as e:
+                        print("[ROLE WARN] Não foi possível editar cor do role encontrado por nome:", e)
+        except Exception as e:
+            print("[ROLE ERROR] Erro ao obter/criar role:", e)
+            role = None
 
     # se conseguiu criar/obter role, salva role_id e aplica a todos
     if role:
         familia["role_id"] = role.id
         salvar(data)
-        await aplicar_cargo_a_todos(guild, role, familia.get("membros", []))
+
+        # aplica permissões se houver
+        permissoes = familia.get("permissoes", [])
+        if isinstance(permissoes, list) and permissoes:
+            try:
+                await aplicar_permissoes_ao_role(role, permissoes)
+            except Exception as e:
+                print("[ROLE WARN] Erro ao aplicar permissoes salvas:", e)
+
+        try:
+            await aplicar_cargo_a_todos(guild, role, familia.get("membros", []))
+        except Exception as e:
+            print("[ROLE WARN] Erro ao aplicar role a todos:", e)
         return role
 
     return None
@@ -225,13 +335,15 @@ class AceitarView(discord.ui.View):
                 data = carregar()
                 role_id = data.get(str(convite["dono"]), {}).get("role_id")
                 cargo = guild.get_role(int(role_id)) if role_id else None
-            except Exception:
+            except Exception as e:
+                print("[ACEITAR WARN] Erro ao obter role após criar:", e)
                 cargo = None
 
             if membro and cargo:
                 try:
                     await membro.add_roles(cargo)
-                except Exception:
+                except Exception as e:
+                    print(f"[ACEITAR WARN] Falha ao adicionar role ao membro: {e}")
                     pass
 
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
@@ -304,7 +416,8 @@ class PainelView(discord.ui.View):
                         role = guild.get_role(int(role_id))
                         if role:
                             await interaction.user.remove_roles(role)
-                except Exception:
+                except Exception as e:
+                    print("[SAIR WARN] Falha ao remover role do usuário:", e)
                     pass
 
                 return await interaction.response.send_message(
@@ -363,8 +476,8 @@ class EditarFamiliaView(discord.ui.View):
         if transform:
             try:
                 value = transform(value)
-            except Exception:
-                return await interaction.followup.send("❌ Valor inválido.", ephemeral=True)
+            except Exception as e:
+                return await interaction.followup.send("❌ Valor inválido: " + str(e), ephemeral=True)
 
         # If empty, keep previous
         if not value:
@@ -373,11 +486,12 @@ class EditarFamiliaView(discord.ui.View):
         data[dono_key][field] = value
         salvar(data)
 
-        # se alterou nome ou cor (ou cargo), atualiza/cria o role e aplica a todos
-        if field in ("nome", "cor", "cargo"):
+        # se alterou nome ou cor (ou cargo/permissoes), atualiza/cria o role e aplica a todos
+        if field in ("nome", "cor", "cargo", "permissoes"):
             try:
                 await atualizar_ou_criar_role_da_familia(dono_key)
-            except Exception:
+            except Exception as e:
+                print("[EDITAR WARN] Erro ao atualizar/criar role da familia:", e)
                 pass
 
         # respond confirming change
@@ -387,6 +501,8 @@ class EditarFamiliaView(discord.ui.View):
             display = value
         if field == "icone":
             display = value if value else "Nenhum"
+        if field == "permissoes":
+            display = ", ".join(value) if isinstance(value, list) else str(value)
         await interaction.followup.send(f"✅ {field.capitalize()} alterado para **{display}**", ephemeral=True)
 
     @discord.ui.button(label="Nome", style=discord.ButtonStyle.secondary, custom_id="editar:nome")
@@ -440,6 +556,29 @@ class EditarFamiliaView(discord.ui.View):
             transform=transform_cor
         )
 
+    @discord.ui.button(label="Permissões", style=discord.ButtonStyle.secondary, custom_id="editar:permissoes")
+    async def permissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """
+        Permite que o dono envie uma lista de permissões separadas por vírgula.
+        Exemplo de entrada: manage_messages, kick_members, manage_roles
+        Apenas permissões em ALLOWED_PERMS serão aceitas.
+        """
+        def transform_perms(v):
+            if not v:
+                return []
+            parts = [p.strip().lower() for p in v.split(",") if p.strip()]
+            invalid = [p for p in parts if p not in ALLOWED_PERMS]
+            if invalid:
+                raise ValueError("Permissões inválidas: " + ", ".join(invalid))
+            return parts
+
+        await self._await_response_and_save(
+            interaction,
+            "✏️ Envie as permissões separadas por vírgula (ex: manage_messages, kick_members). Você tem 60 segundos.",
+            field="permissoes",
+            transform=transform_perms
+        )
+
     @discord.ui.button(label="Voltar", style=discord.ButtonStyle.gray, custom_id="editar:voltar")
     async def voltar(self, interaction: discord.Interaction, button: discord.ui.Button):
         # reabre a view de gerenciamento
@@ -491,7 +630,8 @@ class GerenciarFamiliaView(discord.ui.View):
                         role = guild.get_role(int(role_id))
                         if role:
                             await role.delete(reason="Família excluída")
-            except Exception:
+            except Exception as e:
+                print("[EXCLUIR WARN] Falha ao deletar role associado:", e)
                 pass
 
             del data[str(self.dono_id)]
@@ -526,7 +666,7 @@ async def enviar_embed_gerenciar(ctx_or_interaction, dono_id):
     dono = familia.get("dono")
     membros_count = len(familia.get("membros", []))
     limite = familia.get("limite", 50)
-    cargo_name = familia.get("cargo", nome)  # se tiver cargo salvo
+    cargo_name = familia.get("cargo", nome)  # se tiver cargo salvo (opcional)
     cor_value = familia.get("cor", "#5865F2")  # pode ser "#5865F2" ou "Nome da Cor"
     vip = familia.get("vip", "Nenhum")
 
@@ -554,8 +694,8 @@ async def enviar_embed_gerenciar(ctx_or_interaction, dono_id):
                 color_int = color_int
             cargo_display = f"🏠 {role.name}"
         else:
-            # tenta achar cargo pelo nome salvo em 'cargo_name'
-            role_by_name = discord.utils.get(guild.roles, name=cargo_name)
+            # tenta achar cargo pelo nome salvo em 'cargo_name' ou pelo prefixo
+            role_by_name = discord.utils.get(guild.roles, name=f"Família • {nome}")
             if role_by_name:
                 try:
                     color_int = role_by_name.color.value
@@ -563,14 +703,22 @@ async def enviar_embed_gerenciar(ctx_or_interaction, dono_id):
                     color_int = color_int
                 cargo_display = f"🏠 {role_by_name.name}"
             else:
-                # se 'cor_value' for um nome de cargo existente, tenta usar a cor desse cargo
-                role_by_cor = discord.utils.get(guild.roles, name=cor_value)
-                if role_by_cor:
+                role_by_name2 = discord.utils.get(guild.roles, name=cargo_name)
+                if role_by_name2:
                     try:
-                        color_int = role_by_cor.color.value
+                        color_int = role_by_name2.color.value
                     except:
                         color_int = color_int
-                    cor_display = role_by_cor.name
+                    cargo_display = f"🏠 {role_by_name2.name}"
+                else:
+                    # se 'cor_value' for um nome de cargo existente, tenta usar a cor desse cargo
+                    role_by_cor = discord.utils.get(guild.roles, name=cor_value)
+                    if role_by_cor:
+                        try:
+                            color_int = role_by_cor.color.value
+                        except:
+                            color_int = color_int
+                        cor_display = role_by_cor.name
 
     # se cor_value for HEX, converte para int e mostra o HEX como display
     if isinstance(cor_value, str) and cor_value.startswith("#"):
@@ -625,7 +773,8 @@ async def familia(ctx):
         data[user_id] = {
             "nome": "Minha Família",
             "dono": user_id,
-            "membros": [user_id]
+            "membros": [user_id],
+            "permissoes": []
         }
         salvar(data)
 
@@ -637,9 +786,11 @@ async def familia(ctx):
                 if membro:
                     try:
                         await membro.add_roles(role)
-                    except Exception:
+                    except Exception as e:
+                        print("[FAMILIA WARN] Falha ao adicionar role ao dono:", e)
                         pass
-        except Exception:
+        except Exception as e:
+            print("[FAMILIA WARN] Erro ao atualizar/criar role da familia:", e)
             pass
 
     membros = "\n".join(f"<@{m}>" for m in data[user_id]["membros"])
@@ -686,7 +837,8 @@ async def convidar(ctx, membro: discord.Member = None):
 
         await ctx.reply(f"✅ Convite enviado para {membro.mention}")
 
-    except:
+    except Exception as e:
+        print("[CONVIDAR WARN] Falha ao enviar DM:", e)
         await ctx.reply("❌ Não consegui enviar DM para esse usuário")
 
 
@@ -714,7 +866,8 @@ async def sair(ctx):
                     role = guild.get_role(int(role_id))
                     if role:
                         await ctx.author.remove_roles(role)
-            except Exception:
+            except Exception as e:
+                print("[SAIR WARN] Falha ao remover role do usuário:", e)
                 pass
 
             return await ctx.reply("👋 Você saiu da família!")
@@ -752,7 +905,8 @@ async def expulsar(ctx, membro: discord.Member):
             role = guild.get_role(int(role_id))
             if role:
                 await membro.remove_roles(role)
-    except Exception:
+    except Exception as e:
+        print("[EXPULSAR WARN] Falha ao remover role do membro:", e)
         pass
 
     await ctx.reply(f"🚫 {membro.mention} foi expulso")
@@ -854,8 +1008,7 @@ async def on_message(message):
         saudacoes = {
             "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
             "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
-            "chame o ademiro": "Perdão, levar mute não esta em meus planos hoje<:baka:1466594678064545984>"
+            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
         }
 
         for chave in saudacoes:
@@ -876,54 +1029,6 @@ async def on_message(message):
             await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
             return
 
-        # ==================== CAPÍTULOS FALTANDO ====================
-        frases_capitulos = [
-            "faltando",
-            "faltam",
-            "capítulos",
-            "capitulo",
-            "capítulos sumiram",
-            "faltando capitulo",
-            "não tem capítulos",
-            "nao tem capitulos",
-            "cadê os capítulos",
-            "cade os capitulos",
-            "onde estão os capítulos",
-            "onde estao os capitulos",
-            "faltando capítulos",
-            "faltam capítulos",
-            "capitulos desorganizados",
-            "capítulos desorganizados",
-            "erro",
-            "erros"
-        ]
-
-        if any(frase in texto for frase in frases_capitulos):
-            await message.reply(
-                "❌Envie em <#1452799882149761144>",
-                mention_author=False
-            )
-            return
-
-        
-        # ==================== SUGESTÕES DE OBRAS ====================
-        frases_obras = [
-            "sugestão",
-            "sugestões",
-            "coloca",
-            "colocar",
-            "adicionar",
-            "adiciona"
-        ]
-
-        if any(frase in texto for frase in frases_obras):
-            await message.reply(
-                "📚 Sugestões de obras é em <#1466087941506990171>",
-                mention_author=False
-            )
-            return
-
-        
         # ==================== SUPORTE ====================
         palavras_chave = [
             "login", "senha", "esqueci", "não consigo", "acesso",
@@ -956,6 +1061,50 @@ async def on_message(message):
             )
             return
 
+        # ==================== SUGESTÕES DE OBRAS ====================
+        frases_obras = [
+            "sugestão",
+            "sugestões",
+            "sugestão de obras",
+            "sugestões de obras",
+            "indicação de obra",
+            "indicações de obras",
+            "obras sugeridas",
+            "obras recomendadas"
+        ]
+
+        if any(frase in texto for frase in frases_obras):
+            await message.reply(
+                "📚 Sugestões de obras é em <#1466087941506990171>",
+                mention_author=False
+            )
+            return
+
+        # ==================== CAPÍTULOS FALTANDO ====================
+        frases_capitulos = [
+            "faltando capítulos",
+            "faltam capítulos",
+            "capítulos faltando",
+            "capitulo faltando",
+            "capítulos sumiram",
+            "faltando capitulo",
+            "não tem capítulos",
+            "nao tem capitulos",
+            "cadê os capítulos",
+            "cade os capitulos",
+            "onde estão os capítulos",
+            "onde estao os capitulos",
+            "faltando capítulos",
+            "faltam capítulos"
+        ]
+
+        if any(frase in texto for frase in frases_capitulos):
+            await message.reply(
+                "<#1452799882149761144>",
+                mention_author=False
+            )
+            return
+
         # ==================== BLOQUEIO ====================
         invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
 
@@ -983,7 +1132,8 @@ async def on_message(message):
                 )
 
                 return
-            except Exception:
+            except Exception as e:
+                print("[BLOQUEIO WARN] Erro ao processar invite:", e)
                 pass
 
         # ✅ MUITO IMPORTANTE (não remover)
