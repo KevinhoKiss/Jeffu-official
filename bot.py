@@ -432,6 +432,63 @@ class PainelView(discord.ui.View):
         
 # ==================== SISTEMA FAMÍLIA COMPLETO ====================
 
+# ==================== PERMISSÕES AMIGÁVEIS (UI) ====================
+# Mapeamento entre rótulo visível e chave usada internamente (ALLOWED_PERMS)
+PERMS_FRIENDLY = {
+    "Enviar links (embed links)": "embed_links",
+    "Enviar imagens/arquivos (attach files)": "attach_files",
+    "Enviar áudio/voz (connect)": "connect",
+    "Falar no canal de voz (speak)": "speak",
+    "Enviar mensagens (send messages)": "send_messages",
+    "Adicionar reações (add reactions)": "add_reactions",
+    "Ler histórico de mensagens (read history)": "read_message_history",
+    "Gerenciar mensagens (manage messages)": "manage_messages",
+    "Mencionar everyone (mention everyone)": "mention_everyone",
+    "Gerenciar cargos (manage roles)": "manage_roles"
+}
+
+class PermsSelect(discord.ui.Select):
+    def __init__(self, dono_id: str):
+        options = [
+            discord.SelectOption(label=label, value=value)
+            for label, value in PERMS_FRIENDLY.items()
+        ]
+        super().__init__(placeholder="Selecione as permissões para o cargo da família (máx 10)",
+                         min_values=0, max_values=len(options), options=options, custom_id=f"perms_select:{dono_id}")
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            dono_key = str(interaction.user.id)
+            data = carregar()
+            # tenta achar família cujo dono é o autor
+            familia = data.get(dono_key)
+            if not familia:
+                familia = next((v for k, v in data.items() if str(v.get("dono")) == dono_key), None)
+                if not familia:
+                    return await interaction.response.send_message("❌ Família não encontrada para salvar permissões.", ephemeral=True)
+
+            selecionadas = list(self.values)
+            familia["permissoes"] = selecionadas
+            salvar(data)
+
+            # aplica imediatamente
+            try:
+                await atualizar_ou_criar_role_da_familia(familia.get("dono"))
+            except Exception as e:
+                print("[PERMS WARN] Erro ao aplicar permissoes:", e)
+
+            friendly = [k for k, v in PERMS_FRIENDLY.items() if v in selecionadas]
+            texto = ", ".join(friendly) if friendly else "Nenhuma"
+            await interaction.response.send_message(f"✅ Permissões salvas: {texto}", ephemeral=True)
+        except Exception as e:
+            print("[PERMS ERROR] Erro no callback do select:", e)
+            await interaction.response.send_message("❌ Ocorreu um erro ao salvar as permissões.", ephemeral=True)
+
+class PermsSelectView(discord.ui.View):
+    def __init__(self, dono_id: str):
+        super().__init__(timeout=60)
+        self.add_item(PermsSelect(dono_id))
+
 # ==================== NOVAS VIEWS E FUNÇÕES (para reproduzir o layout da imagem) ====================
 
 class EditarFamiliaView(discord.ui.View):
@@ -558,25 +615,27 @@ class EditarFamiliaView(discord.ui.View):
 
     @discord.ui.button(label="Permissões", style=discord.ButtonStyle.secondary, custom_id="editar:permissoes")
     async def permissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """
-        Permite que o dono envie uma lista de permissões separadas por vírgula.
-        Exemplo de entrada: manage_messages, kick_members, manage_roles
-        Apenas permissões em ALLOWED_PERMS serão aceitas.
-        """
-        def transform_perms(v):
-            if not v:
-                return []
-            parts = [p.strip().lower() for p in v.split(",") if p.strip()]
-            invalid = [p for p in parts if p not in ALLOWED_PERMS]
-            if invalid:
-                raise ValueError("Permissões inválidas: " + ", ".join(invalid))
-            return parts
+        # só o dono pode abrir o seletor
+        if str(interaction.user.id) != str(self.dono_id):
+            return await interaction.response.send_message("❌ Apenas o dono pode editar permissões.", ephemeral=True)
 
-        await self._await_response_and_save(
-            interaction,
-            "✏️ Envie as permissões separadas por vírgula (ex: manage_messages, kick_members). Você tem 60 segundos.",
-            field="permissoes",
-            transform=transform_perms
+        # carrega permissões atuais para pré-seleção
+        data = carregar()
+        familia = data.get(str(self.dono_id), {})
+        atuais = familia.get("permissoes", [])
+
+        # cria view com select e tenta pré-selecionar as atuais
+        view = PermsSelectView(self.dono_id)
+        try:
+            select: PermsSelect = view.children[0]  # nosso select
+            select.values = [v for v in atuais if v in PERMS_FRIENDLY.values()]
+        except Exception:
+            pass
+
+        await interaction.response.send_message(
+            "🛠️ Selecione as permissões que deseja permitir para o cargo da família. As alterações serão aplicadas automaticamente.",
+            view=view,
+            ephemeral=True
         )
 
     @discord.ui.button(label="Voltar", style=discord.ButtonStyle.gray, custom_id="editar:voltar")
@@ -998,6 +1057,16 @@ async def on_ready():
 async def on_message(message):
     try:
         if message.author.bot:
+            return
+
+        # ignore webhooks
+        if getattr(message, "webhook_id", None) is not None:
+            return
+
+        # if channel name is "erro", skip automatic replies but allow commands
+        channel_name = getattr(message.channel, "name", "")
+        if channel_name and channel_name.lower() == "erro":
+            await bot.process_commands(message)
             return
 
         print(f"📨 {message.author}: {message.content}")
