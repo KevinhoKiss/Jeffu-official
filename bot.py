@@ -24,7 +24,6 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 DONO_ID = 766709835701682208
-MOTIVO = "Divulgação de servidor"
 
 CARGOS_AUTORIZADOS = [
     1464361173305655389,
@@ -39,10 +38,6 @@ convites = {}  # convites temporários: {user_id: {"dono": dono_id, "tempo": tim
 
 # ==================== LOG ====================
 async def log(guild: discord.Guild, mensagem: str):
-    """
-    Envia mensagem para o canal de logs configurado (LOG_CHANNEL_ID).
-    Se não encontrar, tenta fallback por nome 'mod-logs' e, se nada, imprime no console.
-    """
     try:
         canal = None
         if guild and LOG_CHANNEL_ID:
@@ -81,10 +76,6 @@ except Exception as e:
 
 # ==================== PERSISTÊNCIA (carregar/salvar) ====================
 def carregar():
-    """
-    Retorna o dicionário de familias.
-    Usa MongoDB se disponível, caso contrário lê o arquivo JSON local.
-    """
     try:
         if familias_db is not None:
             doc = familias_db.find_one({"_id": "familias"})
@@ -106,10 +97,6 @@ def carregar():
         return {}
 
 def salvar(data):
-    """
-    Salva o dicionário de familias.
-    Tenta salvar no MongoDB se disponível; caso contrário salva no arquivo local.
-    """
     if not isinstance(data, dict):
         print("[SAVE ERROR] Dados a salvar não são um dict. Abortando.")
         return
@@ -172,10 +159,6 @@ PERMS_FRIENDLY = {
 ALLOWED_PERMS = set(PERMS_FRIENDLY.values())
 
 async def setup_muted_role(guild: discord.Guild, role: discord.Role):
-    """
-    Configura o cargo Muted em todos os canais do servidor,
-    negando envio de mensagens em texto e fala em voz.
-    """
     for channel in guild.channels:
         try:
             if isinstance(channel, discord.TextChannel):
@@ -194,10 +177,6 @@ async def setup_muted_role(guild: discord.Guild, role: discord.Role):
             traceback.print_exc()
 
 async def get_or_create_muted_role(guild: discord.Guild):
-    """
-    Garante que exista um cargo 'Muted' com permissões negadas
-    e aplica essas permissões em todos os canais.
-    """
     role = discord.utils.get(guild.roles, name="Muted")
     perms = discord.Permissions.none()
     perms.update(
@@ -239,10 +218,6 @@ async def get_or_create_muted_role(guild: discord.Guild):
         return None
 
 async def mute_member(guild: discord.Guild, member: discord.Member):
-    """
-    Aplica o role Muted ao membro. Retorna True se aplicado com sucesso.
-    (mantido para compatibilidade; preferir mute_member_with_duration)
-    """
     try:
         if not guild or not member:
             return False
@@ -269,9 +244,6 @@ async def mute_member(guild: discord.Guild, member: discord.Member):
         return False
 
 async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
-    """
-    Cria ou reutiliza um cargo com logs e checagem de permissão Manage Roles.
-    """
     try:
         if not guild.me.guild_permissions.manage_roles:
             print("[ROLE ERROR] Bot não tem Manage Roles no servidor.")
@@ -348,9 +320,6 @@ async def aplicar_permissoes_ao_role(role: discord.Role, perms_list):
         traceback.print_exc()
 
 async def atualizar_ou_criar_role_da_familia(dono_key: str):
-    """
-    Garante que exista um cargo para a família dono_key e aplica cor/perms/membros.
-    """
     data = carregar()
     familia = data.get(str(dono_key))
     if not familia:
@@ -437,7 +406,7 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
 
 # ==================== MUTES AUTOMÁTICOS (10 minutos) ==================
 MUTES_FILE = "active_mutes.json"
-_active_mutes = {}  # formato: {guild_id_str: {member_id_str: unmute_timestamp}}
+_active_mutes = {}
 
 def _load_mutes():
     global _active_mutes
@@ -494,9 +463,6 @@ async def _schedule_unmute(guild_id: int, member_id: int, delay_seconds: int):
         traceback.print_exc()
 
 async def mute_member_with_duration(guild: discord.Guild, member: discord.Member, seconds: int = 600) -> bool:
-    """
-    Aplica o role 'Muted' ao membro por 'seconds' segundos (padrão 600 = 10m).
-    """
     try:
         if not guild or not member:
             return False
@@ -551,23 +517,32 @@ async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
             return False
         if role not in member.roles:
             return True
+
         try:
             await member.remove_roles(role, reason="Unmuted pelo bot")
+        except Exception as e:
+            print("[UNMUTE ERROR] Falha ao remover role Muted do membro:", e)
+            traceback.print_exc()
+            return False
+
+        try:
             guild_key = str(guild.id)
             if guild_key in _active_mutes and str(member.id) in _active_mutes[guild_key]:
                 del _active_mutes[guild_key][str(member.id)]
                 if not _active_mutes[guild_key]:
                     del _active_mutes[guild_key]
                 _save_mutes()
-            try:
-                await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado.")
-            except Exception:
-                pass
-            return True
         except Exception as e:
-            print("[UNMUTE ERROR] Falha ao remover role Muted do membro:", e)
+            print("[UNMUTE WARN] Falha ao atualizar _active_mutes:", e)
             traceback.print_exc()
-            return False
+
+        try:
+            await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado.")
+        except Exception:
+            pass
+
+        return True
+
     except Exception as e:
         print("[UNMUTE ERROR] Erro inesperado em unmute_member:", e)
         traceback.print_exc()
@@ -600,7 +575,7 @@ async def cmd_unmute(ctx, membro: discord.Member = None):
 
 # ==================== REAÇÕES AUTOMÁTICAS (persistentes) ==================
 REACTIONS_FILE = "reactions_rules.json"
-_reaction_rules = {}  # formato: {guild_id_str: {"by_message": {}, "by_keyword": [] } }
+_reaction_rules = {}
 
 def _load_reaction_rules():
     global _reaction_rules
@@ -617,9 +592,10 @@ def _load_reaction_rules():
 
 def _save_reaction_rules():
     try:
-        with open(REACTIONS_FILE + ".tmp", "w", encoding="utf-8") as f:
+        tmp = REACTIONS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_reaction_rules, f, indent=2, ensure_ascii=False)
-        os.replace(REACTIONS_FILE + ".tmp", REACTIONS_FILE)
+        os.replace(tmp, REACTIONS_FILE)
     except Exception as e:
         print("[REACTIONS WARN] Falha ao salvar regras:", e)
         traceback.print_exc()
@@ -633,9 +609,6 @@ def _ensure_guild_rules(guild_id: int):
     return _reaction_rules[gk]
 
 async def _try_add_reaction(message: discord.Message, emoji: str):
-    """
-    Tenta adicionar a reação. emoji pode ser unicode (ex: 👍) ou custom (<:name:id> ou <a:name:id>).
-    """
     try:
         await message.add_reaction(emoji)
         return True
@@ -650,264 +623,6 @@ async def _try_add_reaction(message: discord.Message, emoji: str):
         except Exception:
             pass
     return False
-
-@bot.command(name="reactadd")
-@commands.guild_only()
-@commands.has_permissions(manage_messages=True)
-async def cmd_reactadd(ctx, target: str = None, *emojis):
-    if not target or not emojis:
-        return await ctx.reply("❌ Uso: `!reactadd <channel_id/message_id | message_link | keyword:palavra> emoji1 emoji2 ...`", mention_author=False)
-
-    guild_rules = _ensure_guild_rules(ctx.guild.id)
-
-    if target.startswith("keyword:"):
-        keyword = target.split("keyword:", 1)[1].strip()
-        if not keyword:
-            return await ctx.reply("❌ Keyword inválida.", mention_author=False)
-        guild_rules["by_keyword"].append({
-            "channel_id": ctx.channel.id,
-            "keyword": keyword.lower(),
-            "emojis": list(emojis)
-        })
-        _save_reaction_rules()
-        return await ctx.reply(f"✅ Regra adicionada: quando mensagem em {ctx.channel.mention} contiver `{keyword}`, reagir com: {' '.join(emojis)}", mention_author=False)
-
-    channel_id = None
-    message_id = None
-    m = re.match(r"https?://(?:canary\.|ptb\.)?discord(?:app)?\.com/channels/\d+/(\d+)/(\d+)", target)
-    if m:
-        channel_id = int(m.group(1))
-        message_id = int(m.group(2))
-    else:
-        if "/" in target:
-            parts = target.split("/")
-            try:
-                channel_id = int(parts[0]); message_id = int(parts[1])
-            except Exception:
-                pass
-        else:
-            try:
-                message_id = int(target)
-                channel_id = ctx.channel.id
-            except Exception:
-                pass
-
-    if not channel_id or not message_id:
-        return await ctx.reply("❌ Não consegui interpretar target. Use link de mensagem, channel_id/message_id ou keyword:palavra.", mention_author=False)
-
-    ch_map = guild_rules["by_message"].setdefault(str(channel_id), {})
-    ch_map[str(message_id)] = list(emojis)
-    _save_reaction_rules()
-    return await ctx.reply(f"✅ Regra adicionada: reagir à mensagem `{message_id}` em <#{channel_id}> com: {' '.join(emojis)}", mention_author=False)
-
-@bot.command(name="reactremove")
-@commands.guild_only()
-@commands.has_permissions(manage_messages=True)
-async def cmd_reactremove(ctx, target: str = None):
-    if not target:
-        return await ctx.reply("❌ Uso: `!reactremove channel_id/message_id` ou `!reactremove message_id`", mention_author=False)
-
-    guild_rules = _ensure_guild_rules(ctx.guild.id)
-
-    channel_id = None
-    message_id = None
-    if "/" in target:
-        parts = target.split("/")
-        try:
-            channel_id = int(parts[0]); message_id = int(parts[1])
-        except Exception:
-            pass
-    else:
-        try:
-            message_id = int(target)
-            channel_id = ctx.channel.id
-        except Exception:
-            pass
-
-    if channel_id and message_id:
-        ch_map = guild_rules["by_message"].get(str(channel_id), {})
-        if str(message_id) in ch_map:
-            del ch_map[str(message_id)]
-            if not ch_map:
-                guild_rules["by_message"].pop(str(channel_id), None)
-            _save_reaction_rules()
-            return await ctx.reply(f"✅ Regra removida para mensagem `{message_id}` em <#{channel_id}>", mention_author=False)
-        else:
-            return await ctx.reply("❌ Regra não encontrada para essa mensagem.", mention_author=False)
-
-    return await ctx.reply("❌ Não consegui interpretar target. Use channel_id/message_id ou message_id no canal atual.", mention_author=False)
-
-@bot.command(name="reactlist")
-@commands.guild_only()
-@commands.has_permissions(manage_messages=True)
-async def cmd_reactlist(ctx):
-    guild_rules = _ensure_guild_rules(ctx.guild.id)
-    lines = []
-    for ch_id, msgs in guild_rules.get("by_message", {}).items():
-        for m_id, emojis in msgs.items():
-            lines.append(f"Mensagem: <#{ch_id}>/{m_id}  →  {' '.join(emojis)}")
-    for i, kw in enumerate(guild_rules.get("by_keyword", []), start=1):
-        ch = kw.get("channel_id")
-        lines.append(f"Keyword #{i}: canal <#{ch}> palavra `{kw.get('keyword')}` → {' '.join(kw.get('emojis',[]))}")
-    if not lines:
-        return await ctx.reply("Nenhuma regra configurada neste servidor.", mention_author=False)
-    chunk = "\n".join(lines)
-    if len(chunk) < 1900:
-        await ctx.reply(f"**Regras:**\n{chunk}", mention_author=False)
-    else:
-        for i in range(0, len(lines), 30):
-            await ctx.reply("```\n" + "\n".join(lines[i:i+30]) + "\n```", mention_author=False)
-
-@bot.command(name="reactapply")
-@commands.guild_only()
-@commands.has_permissions(manage_messages=True)
-async def cmd_reactapply(ctx, channel_id: int = None, message_id: int = None):
-    if not channel_id or not message_id:
-        return await ctx.reply("❌ Uso: `!reactapply <channel_id> <message_id>`", mention_author=False)
-    try:
-        ch = ctx.guild.get_channel(channel_id)
-        if not ch:
-            return await ctx.reply("❌ Canal não encontrado.", mention_author=False)
-        try:
-            msg = await ch.fetch_message(message_id)
-        except Exception:
-            return await ctx.reply("❌ Mensagem não encontrada (verifique IDs e permissões).", mention_author=False)
-        gk = str(ctx.guild.id)
-        rules = _reaction_rules.get(gk, {})
-        emojis = rules.get("by_message", {}).get(str(channel_id), {}).get(str(message_id))
-        if not emojis:
-            return await ctx.reply("❌ Não há regras configuradas para essa mensagem.", mention_author=False)
-        for em in emojis:
-            await _try_add_reaction(msg, em)
-        return await ctx.reply("✅ Reações aplicadas.", mention_author=False)
-    except Exception as e:
-        print("[REACT APPLY ERROR]", e)
-        traceback.print_exc()
-        await ctx.reply("❌ Erro ao aplicar reações.", mention_author=False)
-
-# ==================== VIEWS E INTERAÇÕES (resumido) ====================
-class AceitarView(discord.ui.View):
-    def __init__(self, dono_id):
-        super().__init__(timeout=60)
-        self.dono_id = dono_id
-
-    @discord.ui.button(label="✅ Aceitar convite", style=discord.ButtonStyle.green)
-    async def aceitar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id not in convites:
-            return await interaction.response.send_message("❌ Convite inválido", ephemeral=True)
-
-        convite = convites[interaction.user.id]
-
-        if time.time() - convite["tempo"] > 60:
-            del convites[interaction.user.id]
-            return await interaction.response.send_message("⏰ Convite expirou", ephemeral=True)
-
-        dono_id = str(convite["dono"])
-        user_id = str(interaction.user.id)
-
-        data = carregar()
-
-        if dono_id not in data:
-            return await interaction.response.send_message("❌ Família não existe", ephemeral=True)
-
-        if user_id in data[dono_id]["membros"]:
-            return await interaction.response.send_message("❌ Você já está na família", ephemeral=True)
-
-        data[dono_id]["membros"].append(user_id)
-        salvar(data)
-
-        convites.pop(interaction.user.id, None)
-
-        guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
-        if guild:
-            membro = guild.get_member(interaction.user.id)
-            try:
-                await atualizar_ou_criar_role_da_familia(convite["dono"])
-                data = carregar()
-                role_id = data.get(str(convite["dono"]), {}).get("role_id")
-                cargo = guild.get_role(int(role_id)) if role_id else None
-            except Exception as e:
-                print("[ACEITAR WARN] Erro ao obter role após criar:", e)
-                traceback.print_exc()
-                cargo = None
-
-            if membro and cargo:
-                try:
-                    await membro.add_roles(cargo)
-                except Exception as e:
-                    print(f"[ACEITAR WARN] Falha ao adicionar role ao membro: {e}")
-                    traceback.print_exc()
-                    pass
-
-        await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
-
-class PainelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📋 Ver Família", style=discord.ButtonStyle.blurple, custom_id="painel:ver")
-    async def ver(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data = carregar()
-        user_id = str(interaction.user.id)
-        familia = next((info for info in data.values() if user_id in info.get("membros", [])), None)
-        if not familia:
-            return await interaction.response.send_message("❌ Você não está em nenhuma família", ephemeral=True)
-
-        membros = "\n".join(f"<@{m}>" for m in familia.get("membros", []))
-        embed = discord.Embed(title=f"🏠 {familia.get('nome','Família')}", description=membros, color=0x5865F2)
-        embed.add_field(name="👑 Dono", value=f"<@{familia.get('dono')}>")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ==================== COMANDOS BÁSICOS (exemplos) ====================
-@bot.command()
-async def familia(ctx):
-    autorizados = carregar_autorizados()
-    if not (
-        any(role.id in CARGOS_AUTORIZADOS for role in ctx.author.roles)
-        or ctx.author.guild_permissions.administrator
-        or ctx.author.id == DONO_ID
-        or ctx.author.id in autorizados
-    ):
-        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
-
-    data = carregar()
-    user_id = str(ctx.author.id)
-
-    if user_id not in data:
-        data[user_id] = {
-            "nome": "Minha Família",
-            "dono": user_id,
-            "membros": [user_id],
-            "permissoes": []
-        }
-        salvar(data)
-        try:
-            role = await atualizar_ou_criar_role_da_familia(user_id)
-            if role:
-                membro = ctx.guild.get_member(ctx.author.id)
-                if membro:
-                    try:
-                        await membro.add_roles(role)
-                    except Exception as e:
-                        print("[FAMILIA WARN] Falha ao adicionar role ao dono:", e)
-                        traceback.print_exc()
-                        pass
-        except Exception as e:
-            print("[FAMILIA WARN] Erro ao atualizar/criar role da familia:", e)
-            traceback.print_exc()
-            pass
-
-    membros = "\n".join(f"<@{m}>" for m in data[user_id]["membros"])
-    embed = discord.Embed(title=f"👥 {data[user_id]['nome']}", color=0x5865F2)
-    embed.add_field(name="👑 Dono", value=f"<@{data[user_id]['dono']}>", inline=False)
-    embed.add_field(name=f"👥 Membros ({len(data[user_id]['membros'])})", value=membros, inline=False)
-    await ctx.reply(embed=embed)
-
-# ==================== REGEXS E UTILITÁRIOS ====================
-BAD_WORDS_PATTERN = re.compile(
-    r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto)\b(?:.*(?:jeffu|<@!?\d+>))?",
-    re.IGNORECASE
-)
 
 # ==================== DEFAULT KEYWORD RULES (auto) ==================
 DEFAULT_KEYWORD_RULES = [
@@ -926,10 +641,6 @@ DEFAULT_KEYWORD_RULES = [
 ]
 
 def _ensure_default_rules_for_all_guilds():
-    """
-    Garante que cada guild tenha as regras DEFAULT_KEYWORD_RULES (channel_id = 0).
-    Chame esta função em on_ready (após _load_reaction_rules()).
-    """
     for guild in bot.guilds:
         gk = str(guild.id)
         if gk not in _reaction_rules:
@@ -944,7 +655,7 @@ def _ensure_default_rules_for_all_guilds():
                         break
                 if not found:
                     existing.append({
-                        "channel_id": 0,            # 0 = wildcard (qualquer canal)
+                        "channel_id": 0,
                         "keyword": kw,
                         "is_regex": False,
                         "emojis": rule["emojis"]
@@ -952,25 +663,49 @@ def _ensure_default_rules_for_all_guilds():
         _reaction_rules[gk]["by_keyword"] = existing
     _save_reaction_rules()
 
+# ==================== HELPERS ====================
+def _mentions_jeffu(message: discord.Message) -> bool:
+    """
+    Retorna True se a mensagem mencionar 'jeffu' por substring
+    ou se alguma das menções tiver name/display_name contendo 'jeffu'.
+    """
+    try:
+        content = (message.content or "").lower()
+        if "jeffu" in content:
+            return True
+        # checa menções reais (User objects)
+        for m in getattr(message, "mentions", []):
+            try:
+                name = (m.display_name or m.name or "").lower()
+                if "jeffu" in name:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
 # ==================== EVENTOS E MODERAÇÃO (ÚNICO on_message) ====================
 INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
+
+BAD_WORDS_PATTERN = re.compile(
+    r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto)\b(?:.*(?:jeffu|<@!?\d+>))?",
+    re.IGNORECASE
+)
 
 @bot.event
 async def on_message(message: discord.Message):
     try:
-        # evita responder a si mesmo ou a outros bots
         if message.author.bot:
             return
 
-        # ignore webhooks
         if getattr(message, "webhook_id", None) is not None:
             return
 
-        # ignore messages that are only embeds (common for error/report bots)
         if not message.content and message.embeds:
             return
 
-        # --- APLICAR REAÇÕES POR PALAVRAS (prioritário) ---
+        # aplicar regras por palavra (prioritário)
         try:
             guild = message.guild
             if guild:
@@ -1001,7 +736,6 @@ async def on_message(message: discord.Message):
             print("[REACTIONS ERROR] ao aplicar regras:", e)
             traceback.print_exc()
 
-        # normaliza texto
         texto = (message.content or "").strip()
 
         # BLOQUEIO DE INVITES (10m automático)
@@ -1027,59 +761,72 @@ async def on_message(message: discord.Message):
                 traceback.print_exc()
             return
 
-# REGRAS AUTOMÁTICAS (respostas rápidas) — versão limpa
-texto = (message.content or "").strip()
-lower = texto.lower()
+        # REGRAS AUTOMÁTICAS (respostas rápidas)
+        lower = texto.lower()
 
-palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
-if any(p in lower for p in palavras_chave):
-    await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
-    return
-
-frases_site = ["o site caiu", "site caiu", "site tá fora", "site ta fora", "site offline", "site não funciona", "site nao funciona", "site saiu do ar"]
-if any(frase in lower for frase in frases_site):
-    await message.reply("🌐 Veja em <#1409296003034644542>", mention_author=False)
-    return
-
-frases_obras = ["sugestão de obra", "sugestões de obra", "sugestão de obras", "sugestões de obras", "indicação de obra", "indicações de obras", "obras sugeridas", "obras recomendadas"]
-if any(frase in lower for frase in frases_obras):
-    await message.reply("📚 Sugestões de obras é em <#1466087941506990171>", mention_author=False)
-    return
-
-frases_capitulos = [
-    "faltando capítulos", "faltam capítulos", "capítulos faltando", "capitulo faltando", "capítulos sumiram",
-    "faltando capitulo", "não tem capítulos", "nao tem capitulos", "cadê os capítulos", "cade os capitulos",
-    "onde estão os capítulos", "onde estao os capitulos"
-]
-if any(frase in lower for frase in frases_capitulos):
-    await message.reply("<#1452799882149761144>", mention_author=False)
-    return
-
-is_dm = isinstance(message.channel, discord.DMChannel)
-mentions_bot = bot.user in message.mentions if bot.user else False
-if is_dm or mentions_bot:
-    saudacoes = {
-        "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-        "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-        "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
-    }
-    for chave, resposta in saudacoes.items():
-        if lower.startswith(chave) or (mentions_bot and chave in lower):
-            await message.reply(resposta, mention_author=False)
+        palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
+        if any(p in lower for p in palavras_chave):
+            await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
             return
 
-    if re.search(r"(agradecido jeffu|obg jeffu|obrigado jeffu|vlw jeffu)", texto, re.IGNORECASE):
-        await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
-        return
+        frases_site = ["o site caiu", "site caiu", "site tá fora", "site ta fora", "site offline", "site não funciona", "site nao funciona", "site saiu do ar"]
+        if any(frase in lower for frase in frases_site):
+            await message.reply("🌐 Veja em <#1409296003034644542>", mention_author=False)
+            return
 
-    if re.search(r"(te amo jeffu|amo vc jeffu|amo você jeffu|amo voce jeffu|jeffu te amo |jeffu amo vc |jeffu amo você|jeffu amo voce )", texto, re.IGNORECASE):
-        await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
-        return
+        frases_obras = ["sugestão de obra", "sugestões de obra", "sugestão de obras", "sugestões de obras", "indicação de obra", "indicações de obras", "obras sugeridas", "obras recomendadas"]
+        if any(frase in lower for frase in frases_obras):
+            await message.reply("📚 Sugestões de obras é em <#1466087941506990171>", mention_author=False)
+            return
 
-    if BAD_WORDS_PATTERN.search(texto):
-        await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
-        return
+        frases_capitulos = [
+            "faltando capítulos", "faltam capítulos", "capítulos faltando", "capitulo faltando", "capítulos sumiram",
+            "faltando capitulo", "não tem capítulos", "nao tem capitulos", "cadê os capítulos", "cade os capitulos",
+            "onde estão os capítulos", "onde estao os capitulos"
+        ]
+        if any(frase in lower for frase in frases_capitulos):
+            await message.reply("<#1452799882149761144>", mention_author=False)
+            return
 
+        # Interações dirigidas ao bot (DM ou menção)
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        mentions_bot = bot.user in message.mentions if bot.user else False
+        should_respond_personal = is_dm or mentions_bot
+
+        if should_respond_personal:
+            saudacoes = {
+                "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+                "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+                "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+            }
+            for chave, resposta in saudacoes.items():
+                if lower.startswith(chave) or (mentions_bot and chave in lower):
+                    await message.reply(resposta, mention_author=False)
+                    return
+
+            # agora exige menção/substring 'jeffu' para responder a agradecimentos
+            if re.search(r"(agradecido|obg|obrigado)", texto, re.IGNORECASE) and _mentions_jeffu(message):
+                await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
+                return
+
+            # exige menção/substring 'jeffu' para responder "te amo"
+            if re.search(r"(te amo|amo vc|amo você|amo voce)", texto, re.IGNORECASE) and _mentions_jeffu(message):
+                await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
+                return
+
+            if BAD_WORDS_PATTERN.search(texto):
+                try:
+                    await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+                except Exception as e:
+                    print("[REPLY WARN] Falha ao responder a mensagem:", e)
+                return
+
+        # processa comandos normalmente (sempre)
+        await bot.process_commands(message)
+
+    except Exception as e:
+        print(f"Erro no on_message: {e}")
+        traceback.print_exc()
 
 # ==================== STARTUP / TOKEN ====================
 @bot.event
