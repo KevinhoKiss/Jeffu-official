@@ -1027,70 +1027,123 @@ async def on_message(message: discord.Message):
                 traceback.print_exc()
             return
 
-        # REGRAS AUTOMÁTICAS (respostas rápidas)
-        palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
-        if any(p in texto.lower() for p in palavras_chave):
+# ----------------- REGRAS AUTOMÁTICAS (respostas rápidas) [PATCH DEBUG] -----------------
+# Substitua o bloco atual de "REGRAS AUTOMÁTICAS (respostas rápidas)" por este.
+try:
+    # debug inicial
+    print(f"[AUTO-RESP] Entrando nas regras automáticas — author={message.author} channel={getattr(message.channel,'id',None)} content_len={len(message.content or '')}")
+
+    texto = (message.content or "").strip()
+    lower = texto.lower()
+
+    # 1) Suporte / palavras-chave gerais
+    palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
+    if any(p in lower for p in palavras_chave):
+        print("[AUTO-RESP] Matched suporte keywords:", [p for p in palavras_chave if p in lower])
+        try:
             await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
-            return
+        except Exception as e:
+            print("[AUTO-RESP ERROR] Falha ao enviar resposta de suporte:", e)
+            traceback.print_exc()
+        # não retorna aqui se quiser que outras checagens rodem; mas mantemos return para evitar múltiplas respostas
+        return
 
-        frases_site = ["o site caiu", "site caiu", "site tá fora", "site ta fora", "site offline", "site não funciona", "site nao funciona", "site saiu do ar"]
-        if any(frase in texto.lower() for frase in frases_site):
+    # 2) Site fora / status
+    frases_site = ["o site caiu", "site caiu", "site tá fora", "site ta fora", "site offline", "site não funciona", "site nao funciona", "site saiu do ar"]
+    if any(frase in lower for frase in frases_site):
+        print("[AUTO-RESP] Matched site phrases:", [f for f in frases_site if f in lower])
+        try:
             await message.reply("🌐 Veja em <#1409296003034644542>", mention_author=False)
-            return
+        except Exception as e:
+            print("[AUTO-RESP ERROR] Falha ao enviar resposta site:", e)
+            traceback.print_exc()
+        return
 
-        frases_obras = ["sugestão de obra", "sugestões de obra", "sugestão de obras", "sugestões de obras", "indicação de obra", "indicações de obras", "obras sugeridas", "obras recomendadas"]
-        if any(frase in texto.lower() for frase in frases_obras):
+    # 3) Sugestões de obras
+    frases_obras = ["sugestão de obra", "sugestões de obra", "sugestão de obras", "sugestões de obras", "indicação de obra", "indicações de obras", "obras sugeridas", "obras recomendadas"]
+    if any(frase in lower for frase in frases_obras):
+        print("[AUTO-RESP] Matched obras phrases")
+        try:
             await message.reply("📚 Sugestões de obras é em <#1466087941506990171>", mention_author=False)
-            return
+        except Exception as e:
+            print("[AUTO-RESP ERROR] Falha ao enviar resposta obras:", e)
+            traceback.print_exc()
+        return
 
-        frases_capitulos = [
-            "faltando capítulos", "faltam capítulos", "capítulos faltando", "capitulo faltando", "capítulos sumiram",
-            "faltando capitulo", "não tem capítulos", "nao tem capitulos", "cadê os capítulos", "cade os capitulos",
-            "onde estão os capítulos", "onde estao os capitulos"
-        ]
-        if any(frase in texto.lower() for frase in frases_capitulos):
+    # 4) Capítulos
+    frases_capitulos = [
+        "faltando capítulos", "faltam capítulos", "capítulos faltando", "capitulo faltando", "capítulos sumiram",
+        "faltando capitulo", "não tem capítulos", "nao tem capitulos", "cadê os capítulos", "cade os capitulos",
+        "onde estão os capítulos", "onde estao os capitulos"
+    ]
+    if any(frase in lower for frase in frases_capitulos):
+        print("[AUTO-RESP] Matched capítulos phrases")
+        try:
             await message.reply("<#1452799882149761144>", mention_author=False)
+        except Exception as e:
+            print("[AUTO-RESP ERROR] Falha ao enviar resposta capítulos:", e)
+            traceback.print_exc()
+        return
+
+    # 5) Interações dirigidas ao bot (DM ou menção)
+    is_dm = isinstance(message.channel, discord.DMChannel)
+    mentions_bot = bot.user in message.mentions if bot.user else False
+    should_respond_personal = is_dm or mentions_bot
+    print(f"[AUTO-RESP] is_dm={is_dm} mentions_bot={mentions_bot}")
+
+    if should_respond_personal:
+        # saudações
+        saudacoes = {
+            "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+            "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+        }
+        for chave, resposta in saudacoes.items():
+            if lower.startswith(chave) or (mentions_bot and chave in lower):
+                print(f"[AUTO-RESP] Matched saudação: {chave}")
+                try:
+                    await message.reply(resposta, mention_author=False)
+                except Exception as e:
+                    print("[AUTO-RESP ERROR] Falha ao enviar saudação:", e)
+                    traceback.print_exc()
+                return
+
+        # agradecimentos
+        if re.search(r"(agradecido|obg|obrigado)", texto, re.IGNORECASE):
+            print("[AUTO-RESP] Matched agradecimento")
+            try:
+                await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
+            except Exception as e:
+                print("[AUTO-RESP ERROR] Falha ao enviar agradecimento:", e)
+                traceback.print_exc()
             return
 
-        # Interações dirigidas ao bot (DM ou menção)
-        is_dm = isinstance(message.channel, discord.DMChannel)
-        mentions_bot = bot.user in message.mentions if bot.user else False
-        should_respond_personal = is_dm or mentions_bot
-
-        if should_respond_personal:
-            # SAUDAÇÕES
-            saudacoes = {
-                "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-                "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-                "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
-            }
-            for chave in saudacoes:
-                if texto.lower().startswith(chave) or (mentions_bot and chave in texto.lower()):
-                    await message.reply(saudacoes[chave], mention_author=False)
-                    return
-
-            if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto, re.IGNORECASE):
-                await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
-                return
-
-            if re.search(r"(te amo|amo vc|amo você).*(jeffu)?", texto, re.IGNORECASE):
+        # declarações de afeto
+        if re.search(r"(te amo|amo vc|amo você|amo voce)", texto, re.IGNORECASE):
+            print("[AUTO-RESP] Matched te amo")
+            try:
                 await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
-                return
+            except Exception as e:
+                print("[AUTO-RESP ERROR] Falha ao enviar te amo:", e)
+                traceback.print_exc()
+            return
 
-            # regex robusta para "cala boca" e variações
-            if BAD_WORDS_PATTERN.search(texto):
-                try:
-                    await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
-                except Exception as e:
-                    print("[REPLY WARN] Falha ao responder a mensagem:", e)
-                return
+        # "cala boca" e variações (usa BAD_WORDS_PATTERN)
+        if BAD_WORDS_PATTERN.search(texto):
+            print("[AUTO-RESP] Matched BAD_WORDS_PATTERN")
+            try:
+                await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+            except Exception as e:
+                print("[AUTO-RESP ERROR] Falha ao enviar resposta 'cala boca':", e)
+                traceback.print_exc()
+            return
 
-        # processa comandos normalmente (sempre)
-        await bot.process_commands(message)
-
-    except Exception as e:
-        print(f"Erro no on_message: {e}")
-        traceback.print_exc()
+    # se chegou até aqui, nenhuma regra automática bateu
+    print("[AUTO-RESP] Nenhuma regra automática bateu para esta mensagem.")
+except Exception as e:
+    print("[AUTO-RESP ERROR] Erro no bloco de respostas automáticas:", e)
+    traceback.print_exc()
+# ----------------- fim do PATCH DEBUG -----------------
 
 # ==================== STARTUP / TOKEN ====================
 @bot.event
