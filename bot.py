@@ -10,7 +10,7 @@ import asyncio
 
 try:
     from pymongo import MongoClient
-except:
+except Exception:
     MongoClient = None
 
 # ==================== CONFIG ====================
@@ -673,10 +673,9 @@ def _mentions_jeffu(message: discord.Message) -> bool:
         content = (message.content or "").lower()
         if "jeffu" in content:
             return True
-        # checa menções reais (User objects)
         for m in getattr(message, "mentions", []):
             try:
-                name = (m.display_name or m.name or "").lower()
+                name = (getattr(m, "display_name", None) or getattr(m, "name", "") or "").lower()
                 if "jeffu" in name:
                     return True
             except Exception:
@@ -804,12 +803,12 @@ async def on_message(message: discord.Message):
                     await message.reply(resposta, mention_author=False)
                     return
 
-            # agora exige menção/substring 'jeffu' para responder a agradecimentos
+            # responde agradecimentos apenas se mencionar 'jeffu'
             if re.search(r"(agradecido|obg|obrigado)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
                 return
 
-            # exige menção/substring 'jeffu' para responder "te amo"
+            # responde "te amo" apenas se mencionar 'jeffu'
             if re.search(r"(te amo|amo vc|amo você|amo voce)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
                 return
