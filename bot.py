@@ -719,213 +719,92 @@ async def familia(ctx):
     if not (
         any(role.id in CARGOS_AUTORIZADOS for role in ctx.author.roles)
         or ctx.author.guild_permissions.administrator
-        or ctx.author.id == DONO_ID
         or ctx.author.id in autorizados
     ):
-        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
+        return await ctx.reply("❌ Você não tem permissão para usar este comando.")
 
-    data = carregar()
+    view = PainelView()
+    await ctx.reply("Painel de famílias:", view=view)
+
+@bot.command(name="criar")
+@commands.guild_only()
+async def criar_familia(ctx, *, nome: str = "Minha Família"):
     user_id = str(ctx.author.id)
-
-    if user_id not in data:
-        data[user_id] = {
-            "nome": "Minha Família",
-            "dono": user_id,
-            "membros": [user_id],
-            "permissoes": []
-        }
-        salvar(data)
-        try:
-            role = await atualizar_ou_criar_role_da_familia(user_id)
-            if role:
-                membro = ctx.guild.get_member(ctx.author.id)
-                if membro:
-                    try:
-                        await membro.add_roles(role)
-                    except Exception as e:
-                        print("[FAMILIA WARN] Falha ao adicionar role ao dono:", e)
-                        pass
-        except Exception as e:
-            print("[FAMILIA WARN] Erro ao atualizar/criar role da familia:", e)
-            pass
-
-    membros = "\n".join(f"<@{m}>" for m in data[user_id]["membros"])
-    embed = discord.Embed(title=f"👥 {data[user_id]['nome']}", color=0x5865F2)
-    embed.add_field(name="👑 Dono", value=f"<@{data[user_id]['dono']}>", inline=False)
-    embed.add_field(name=f"👥 Membros ({len(data[user_id]['membros'])})", value=membros, inline=False)
-    await ctx.reply(embed=embed)
-
-@bot.command()
-async def convidar(ctx, membro: discord.Member = None):
-    if membro is None:
-        return await ctx.reply("❌ Você precisa mencionar alguém!")
-
-    autorizados = carregar_autorizados()
-    if not (
-        any(role.id in CARGOS_AUTORIZADOS for role in ctx.author.roles)
-        or ctx.author.guild_permissions.administrator
-        or ctx.author.id == DONO_ID
-        or ctx.author.id in autorizados
-    ):
-        return await ctx.reply("❌ Você não tem permissão!", mention_author=False)
-
-    convites[membro.id] = {"dono": ctx.author.id, "tempo": time.time()}
-    view = AceitarView(ctx.author.id)
-    try:
-        await membro.send(f"📩 Convite para a família de {ctx.author.mention} (expira em 60s)", view=view)
-        await ctx.reply(f"✅ Convite enviado para {membro.mention}")
-    except Exception as e:
-        print("[CONVIDAR WARN] Falha ao enviar DM:", e)
-        await ctx.reply("❌ Não consegui enviar DM para esse usuário")
-
-@bot.command()
-async def sair(ctx):
     data = carregar()
-    user_id = str(ctx.author.id)
-    for dono, info in data.items():
-        if user_id in info["membros"]:
-            if dono == user_id:
-                return await ctx.reply("❌ Você é o dono!")
-            info["membros"].remove(user_id)
-            salvar(data)
-            try:
-                guild = ctx.guild
-                role_id = info.get("role_id")
-                if guild and role_id:
-                    role = guild.get_role(int(role_id))
-                    if role:
-                        await ctx.author.remove_roles(role)
-            except Exception as e:
-                print("[SAIR WARN] Falha ao remover role do usuário:", e)
-                pass
-            return await ctx.reply("👋 Você saiu da família!")
-    await ctx.reply("❌ Você não está em nenhuma família")
-
-@bot.command()
-async def expulsar(ctx, membro: discord.Member):
-    data = carregar()
-    user_id = str(ctx.author.id)
-    alvo_id = str(membro.id)
-    familia = data.get(user_id)
-    if not familia:
-        return await ctx.reply("❌ Você não tem família")
-    if alvo_id not in familia["membros"]:
-        return await ctx.reply("❌ Esse usuário não está na sua família")
-    if alvo_id == user_id:
-        return await ctx.reply("❌ Você não pode expulsar a si mesmo")
-    familia["membros"].remove(alvo_id)
+    if user_id in data:
+        return await ctx.reply("❌ Você já tem uma família criada.")
+    familia = {
+        "dono": user_id,
+        "nome": nome,
+        "membros": [user_id],
+        "cor": "#5865F2",
+        "permissoes": [],
+        "limite": 50,
+        "vip": "Nenhum"
+    }
+    data[user_id] = familia
     salvar(data)
     try:
-        guild = ctx.guild
-        role_id = familia.get("role_id")
-        if guild and role_id:
-            role = guild.get_role(int(role_id))
-            if role:
-                await membro.remove_roles(role)
+        await atualizar_ou_criar_role_da_familia(user_id)
     except Exception as e:
-        print("[EXPULSAR WARN] Falha ao remover role do membro:", e)
-        pass
-    await ctx.reply(f"🚫 {membro.mention} foi expulso")
+        print("[CRIAR WARN] Erro ao criar role:", e)
+    await ctx.reply(f"✅ Família **{nome}** criada com sucesso!")
 
-@bot.command()
-async def painel(ctx):
+@bot.command(name="convidar")
+@commands.guild_only()
+async def convidar(ctx, membro: discord.Member):
     data = carregar()
-    user_id = str(ctx.author.id)
-    for dono, info in data.items():
-        if user_id in info["membros"]:
-            membros = "\n".join(f"<@{m}>" for m in info["membros"])
-            embed = discord.Embed(title=f"🏠 {info['nome']}", description=membros, color=0x5865F2)
-            embed.add_field(name="👑 Dono", value=f"<@{info['dono']}>")
-            return await ctx.reply(embed=embed)
-    await ctx.reply("❌ Você não está em nenhuma família")
+    dono_key = str(ctx.author.id)
+    familia = data.get(dono_key)
+    if not familia:
+        familia = next((v for k, v in data.items() if str(v.get("dono")) == dono_key), None)
+        if not familia:
+            return await ctx.reply("❌ Você não é dono de nenhuma família.")
+    if str(membro.id) in familia.get("membros", []):
+        return await ctx.reply("❌ Esse usuário já está na família.")
+    convites[membro.id] = {"dono": int(dono_key), "tempo": time.time()}
+    try:
+        view = AceitarView(int(dono_key))
+        await membro.send(f"Você foi convidado para entrar na família **{familia.get('nome')}**. Clique para aceitar.", view=view)
+        await ctx.reply(f"✅ Convite enviado para {membro.mention}.")
+    except Exception as e:
+        print("[CONVIDAR WARN] Falha ao enviar DM:", e)
+        await ctx.reply(f"⚠️ Não foi possível enviar DM para {membro.mention}. O convite foi registrado; peça para o usuário verificar as DMs ou use `!convidar` novamente.")
 
-@bot.command()
-async def up(ctx, tipo=None):
-    if tipo != "painel":
-        return await ctx.reply("❌ Use: !up painel")
-    embed = discord.Embed(title="🏠 Sistema de Família", description="Use os botões abaixo 👇", color=0x5865F2)
-    await ctx.send(embed=embed, view=PainelView())
+@bot.command(name="painel")
+@commands.guild_only()
+async def painel(ctx):
+    view = PainelView()
+    await ctx.reply("Painel de famílias:", view=view)
 
-@bot.command()
+@bot.command(name="gerenciar")
+@commands.guild_only()
 async def gerenciar(ctx):
     data = carregar()
     user_id = str(ctx.author.id)
-    familia = next((dono for dono, info in data.items() if user_id in info["membros"]), None)
+    familia = data.get(user_id)
     if not familia:
-        return await ctx.reply("❌ Você não está em nenhuma família")
-    await enviar_embed_gerenciar(ctx, int(familia))
+        familia = next((v for k, v in data.items() if str(v.get("dono")) == user_id), None)
+        if not familia:
+            return await ctx.reply("❌ Você não é dono de nenhuma família.")
+        dono_key = familia.get("dono")
+    else:
+        dono_key = user_id
+    await enviar_embed_gerenciar(ctx, int(dono_key))
 
-# ==================== SLASH ====================
-@bot.tree.command(name="autorizar", description="Autorizar usuário")
-async def autorizar(interaction: discord.Interaction, user: discord.Member):
-    if not (interaction.user.id == DONO_ID or interaction.user.guild_permissions.administrator):
-        return await interaction.response.send_message("❌ Sem permissão!", ephemeral=True)
-    autorizados = carregar_autorizados()
-    if user.id not in autorizados:
-        autorizados.append(user.id)
-        salvar_autorizados(autorizados)
-    await interaction.response.send_message(f"✅ {user.mention} autorizado!", ephemeral=True)
+# ==================== EVENTOS E MODERAÇÃO ====================
+INVITE_REGEX = re.compile(r"(discord(?:\.gg|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
 
-# ==================== READY ====================
 @bot.event
-async def on_ready():
-    print(f'✅ Bot {bot.user} conectado!')
-    bot.add_view(PainelView())
+async def on_message(message: discord.Message):
     try:
-        await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="Suporte - Tickets"))
-        synced = await bot.tree.sync()
-        print(f"🔄 {len(synced)} comandos sincronizados")
-    except Exception:
-        traceback.print_exc()
-
-# ==================== MENSAGENS (on_message) sem IA ====================
-@bot.event
-async def on_message(message):
-    try:
-        # evita responder a si mesmo ou a outros bots
+        # ignora mensagens do bot
         if message.author.bot:
             return
 
-        # ignore webhooks
-        if getattr(message, "webhook_id", None) is not None:
-            return
-
-        # ignore messages that are only embeds (common for error/report bots)
-        if not message.content and message.embeds:
-            return
-
-        # sempre processa comandos (prefixo "!")
-        # mas só responde automaticamente a mensagens "direcionadas" ao bot para interações casuais
+        texto = (message.content or "").lower()
         is_dm = isinstance(message.channel, discord.DMChannel)
-        mentions_bot = bot.user in message.mentions
-
-        # se o canal for chamado "erro", não envie respostas automáticas (apenas comandos)
-        channel_name = getattr(message.channel, "name", "")
-        if channel_name and channel_name.lower() == "erro":
-            await bot.process_commands(message)
-            return
-
-        # registra para debug
-        print(f"📨 {message.author} ({'DM' if is_dm else channel_name}): {message.content}")
-
-        texto = (message.content or "").lower().strip()
-
-        # --- BLOQUEIO DE INVITES (mantém comportamento atual) ---
-        invite_pattern = r"(discord\.gg\/\w+|discord\.com\/invite\/\w+)"
-        if re.search(invite_pattern, message.content):
-            # permite admins/dono
-            if (message.author.guild_permissions.administrator or message.author.id == DONO_ID):
-                await bot.process_commands(message)
-                return
-            try:
-                await message.delete()
-                await log(message.guild, f"⚠️ {message.author} enviou link: {message.content}")
-                await message.guild.ban(message.author, reason=MOTIVO)
-                await log(message.guild, f"🚫 {message.author} foi banido por divulgação")
-                return
-            except Exception as e:
-                print("[BLOQUEIO WARN] Erro ao processar invite:", e)
-                pass
+        mentions_bot = bot.user and (bot.user.mentioned_in(message))
 
         # --- REGRAS QUE DEVEM RODAR SEMPRE (mesmo sem menção) ---
         palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
@@ -951,6 +830,28 @@ async def on_message(message):
         if any(frase in texto for frase in frases_capitulos):
             await message.reply("<#1452799882149761144>", mention_author=False)
             return
+
+        # checa convites externos e age com moderação (deleta + log)
+        try:
+            if INVITE_REGEX.search(message.content or ""):
+                try:
+                    await message.delete()
+                except Exception as e:
+                    print("[MOD WARN] Falha ao deletar mensagem com invite:", e)
+                guild = message.guild
+                info = f"⚠️ Mensagem com invite removida de {message.author.mention} ({message.author.id}) no canal {message.channel.mention if message.channel else 'DM'}: {message.content}"
+                print(info)
+                try:
+                    if guild:
+                        await log(guild, info)
+                        mod_channel = guild.get_channel(LOG_CHANNEL_ID)
+                        if mod_channel:
+                            await mod_channel.send(f"{info}\nAção recomendada: revisar e aplicar sanções manuais se necessário.")
+                except Exception:
+                    pass
+                return
+        except Exception as e:
+            print("[ON_MESSAGE WARN] Erro ao checar invites:", e)
 
         # --- INTERAÇÕES que devem ocorrer apenas quando a mensagem for dirigida ao bot ---
         should_respond_personal = is_dm or mentions_bot
@@ -986,9 +887,24 @@ async def on_message(message):
     except Exception as e:
         print(f"Erro no on_message: {e}")
 
-# ==================== TOKEN ====================
+# ==================== STARTUP / TOKEN ====================
+@bot.event
+async def on_ready():
+    print(f"[BOT] Logado como {bot.user} (id: {bot.user.id})")
+    # tenta atualizar roles para todas as familias no startup (não bloqueante)
+    try:
+        data = carregar()
+        for dono in list(data.keys()):
+            try:
+                asyncio.create_task(atualizar_ou_criar_role_da_familia(dono))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+# Carrega token do ambiente
 TOKEN = os.getenv("DISCORD_TOKEN")
 if TOKEN:
     bot.run(TOKEN)
 else:
-    print("❌ Token não encontrado!")
+    print("❌ Token não encontrado! Defina a variável de ambiente DISCORD_TOKEN.")
