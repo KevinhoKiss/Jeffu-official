@@ -792,16 +792,26 @@ async def on_message(message: discord.Message):
         mentions_bot = bot.user in message.mentions if bot.user else False
         should_respond_personal = is_dm or mentions_bot
 
-        if should_respond_personal:
+        if message.author.bot:
+            return
+
+        print(f"📨 {message.author}: {message.content}")
+        texto = message.content.lower()
+        texto_limpo = texto.strip()
+
+
             saudacoes = {
-                "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-                "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-                "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
-            }
-            for chave, resposta in saudacoes.items():
-                if lower.startswith(chave) or (mentions_bot and chave in lower):
-                    await message.reply(resposta, mention_author=False)
-                    return
+               "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+               "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+               "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
+               "chame o ademiro": "Perdão, levar mute não esta em meus planos hoje<:baka:1466594678064545984>"
+           }
+
+           for chave in saudacoes:
+               if texto_limpo.startswith(chave):
+                   await message.reply(saudacoes[chave], mention_author=False)
+                   return
+        
 
             # responde agradecimentos apenas se mencionar 'jeffu'
             if re.search(r"(agradecido|obg|obrigado|vlw)", texto, re.IGNORECASE) and _mentions_jeffu(message):
