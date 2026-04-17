@@ -804,7 +804,7 @@ async def on_message(message: discord.Message):
                     return
 
             # responde agradecimentos apenas se mencionar 'jeffu'
-            if re.search(r"(agradecido|obg|obrigado)", texto, re.IGNORECASE) and _mentions_jeffu(message):
+            if re.search(r"(agradecido|obg|obrigado|vlw)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
                 return
 
