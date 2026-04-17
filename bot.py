@@ -909,6 +909,49 @@ BAD_WORDS_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# ==================== DEFAULT KEYWORD RULES (auto) ==================
+DEFAULT_KEYWORD_RULES = [
+    {
+        "keywords": ["bis", "bisdov", "bisdov3", "chefe"],
+        "emojis": ["<:FBI:1466776866122629252>"]
+    },
+    {
+        "keywords": ["theus", "matheus", "god", "matheuz", "matheuss", "matheuzinho"],
+        "emojis": ["<:suspect:1466766825361641634>"]
+    },
+    {
+        "keywords": ["lipe", "lipezinho", "lipezito"],
+        "emojis": ["<:808757471270404098:1466605544143061193>"]
+    }
+]
+
+def _ensure_default_rules_for_all_guilds():
+    """
+    Garante que cada guild tenha as regras DEFAULT_KEYWORD_RULES (channel_id = 0).
+    Chame esta função em on_ready (após _load_reaction_rules()).
+    """
+    for guild in bot.guilds:
+        gk = str(guild.id)
+        if gk not in _reaction_rules:
+            _reaction_rules[gk] = {"by_message": {}, "by_keyword": []}
+        existing = _reaction_rules[gk].get("by_keyword", [])
+        for rule in DEFAULT_KEYWORD_RULES:
+            for kw in rule["keywords"]:
+                found = False
+                for ex in existing:
+                    if ex.get("keyword","").lower() == kw.lower() and set(ex.get("emojis",[])) == set(rule["emojis"]):
+                        found = True
+                        break
+                if not found:
+                    existing.append({
+                        "channel_id": 0,            # 0 = wildcard (qualquer canal)
+                        "keyword": kw,
+                        "is_regex": False,
+                        "emojis": rule["emojis"]
+                    })
+        _reaction_rules[gk]["by_keyword"] = existing
+    _save_reaction_rules()
+
 # ==================== EVENTOS E MODERAÇÃO (ÚNICO on_message) ====================
 INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
 
@@ -927,34 +970,31 @@ async def on_message(message: discord.Message):
         if not message.content and message.embeds:
             return
 
-        # APLICAR REAÇÕES CONFIGURADAS (prioritário)
+        # --- APLICAR REAÇÕES POR PALAVRAS (prioritário) ---
         try:
             guild = message.guild
             if guild:
                 gk = str(guild.id)
                 rules = _reaction_rules.get(gk, {})
-                # by_message
-                by_msg = rules.get("by_message", {})
-                ch_map = by_msg.get(str(message.channel.id), {})
-                emojis = ch_map.get(str(message.id))
-                if emojis:
-                    for em in emojis:
-                        try:
-                            await _try_add_reaction(message, em)
-                        except Exception:
-                            pass
-                # by_keyword
                 for kw in rules.get("by_keyword", []):
                     try:
-                        if int(kw.get("channel_id")) != message.channel.id:
+                        ch_id = int(kw.get("channel_id", 0))
+                        if ch_id != 0 and ch_id != message.channel.id:
                             continue
-                        keyword = kw.get("keyword", "").lower()
-                        if keyword and keyword in (message.content or "").lower():
-                            for em in kw.get("emojis", []):
-                                try:
+                        content = (message.content or "")
+                        if not content:
+                            continue
+                        if kw.get("is_regex"):
+                            try:
+                                if re.search(kw.get("keyword", ""), content, re.IGNORECASE):
+                                    for em in kw.get("emojis", []):
+                                        await _try_add_reaction(message, em)
+                            except re.error:
+                                print("[REACTIONS WARN] Regex inválida para regra:", kw.get("keyword"))
+                        else:
+                            if kw.get("keyword", "").lower() in content.lower():
+                                for em in kw.get("emojis", []):
                                     await _try_add_reaction(message, em)
-                                except Exception:
-                                    pass
                     except Exception:
                         pass
         except Exception as e:
@@ -1056,7 +1096,12 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     print(f"[BOT] Logado como {bot.user} (id: {bot.user.id})")
-    bot.add_view(PainelView())
+    try:
+        _ensure_default_rules_for_all_guilds()
+    except Exception as e:
+        print("[DEFAULT RULES WARN] Falha ao garantir regras padrão:", e)
+        traceback.print_exc()
+
     # re-agenda mutes carregados do arquivo
     try:
         now = int(time.time())
