@@ -151,7 +151,6 @@ def salvar_autorizados(lista):
         print("[FILE ERROR] Falha ao salvar autorizados:", e)
 
 # ==================== UTILITÁRIOS DE CARGO ====================
-# Permissões internas permitidas para donos escolherem
 PERMS_FRIENDLY = {
     "Enviar links": "embed_links",
     "Enviar imagens/arquivos": "attach_files",
@@ -164,10 +163,8 @@ PERMS_FRIENDLY = {
     "Mencionar everyone": "mention_everyone",
     "Gerenciar cargos": "manage_roles"
 }
-
 ALLOWED_PERMS = set(PERMS_FRIENDLY.values())
 
-# >>> NOVA FUNÇÃO <<<
 async def setup_muted_role(guild: discord.Guild, role: discord.Role):
     """
     Configura o cargo Muted em todos os canais do servidor,
@@ -180,7 +177,7 @@ async def setup_muted_role(guild: discord.Guild, role: discord.Role):
             elif isinstance(channel, discord.VoiceChannel):
                 await channel.set_permissions(role, speak=False, connect=False)
         except Exception as e:
-            print(f"[MUTE SETUP WARN] Falha ao configurar canal {channel.name}: {e}")
+            print(f"[MUTE SETUP WARN] Falha ao configurar canal {getattr(channel,'name',str(channel))}: {e}")
 
 async def get_or_create_muted_role(guild: discord.Guild):
     """
@@ -193,8 +190,11 @@ async def get_or_create_muted_role(guild: discord.Guild):
                  attach_files=False, embed_links=False)
 
     if role:
-        await role.edit(permissions=perms)
-        await setup_muted_role(guild, role)   # <<< chamada aqui
+        try:
+            await role.edit(permissions=perms)
+        except Exception as e:
+            print(f"[MUTE WARN] Não foi possível editar permissões do role Muted: {e}")
+        await setup_muted_role(guild, role)
         return role
 
     # se não existe, cria
@@ -202,11 +202,43 @@ async def get_or_create_muted_role(guild: discord.Guild):
         print("[MUTE ERROR] Bot não tem Manage Roles; não é possível criar Muted role.")
         return None
 
-    role = await guild.create_role(name="Muted", permissions=perms,
-                                   reason="Role de mute criado pelo bot")
-    print(f"[MUTE OK] Role Muted criado: {role} (id={role.id})")
-    await setup_muted_role(guild, role)       # <<< chamada aqui
-    return role
+    try:
+        role = await guild.create_role(name="Muted", permissions=perms,
+                                       reason="Role de mute criado pelo bot")
+        print(f"[MUTE OK] Role Muted criado: {role} (id={role.id})")
+        await setup_muted_role(guild, role)
+        return role
+    except Exception as e:
+        print(f"[MUTE ERROR] Falha ao criar role Muted: {e}")
+        return None
+
+async def mute_member(guild: discord.Guild, member: discord.Member):
+    """
+    Aplica o role Muted ao membro. Retorna True se aplicado com sucesso.
+    """
+    try:
+        if not guild or not member:
+            return False
+        role = await get_or_create_muted_role(guild)
+        if not role:
+            return False
+        # checa se já está mutado
+        if role in member.roles:
+            return True
+        try:
+            await member.add_roles(role, reason="Muted por envio de invite/propaganda")
+            info = f"🔇 {member.mention} ({member.id}) foi mutado por envio de invite/propaganda."
+            try:
+                await log(guild, info)
+            except Exception:
+                print("[MUTE LOG WARN] Falha ao logar mute no canal de logs.")
+            return True
+        except Exception as e:
+            print("[MUTE ERROR] Falha ao adicionar role Muted ao membro:", e)
+            return False
+    except Exception as e:
+        print("[MUTE ERROR] Erro inesperado em mute_member:", e)
+        return False
 
 async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
     """
@@ -245,26 +277,6 @@ async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_in
         print("[ROLE ERROR] Erro inesperado ao criar role:", e)
     return None
 
-        # cria novo role
-        try:
-            if color_int is not None:
-                role = await guild.create_role(name=role_name, colour=discord.Colour(color_int), reason="Criado pelo sistema de famílias")
-            else:
-                role = await guild.create_role(name=role_name, reason="Criado pelo sistema de famílias")
-            print(f"[ROLE OK] Role criado: {role} (id={role.id})")
-            return role
-        except discord.Forbidden:
-            print("[ROLE ERROR] Forbidden: bot não pode criar/editar roles (hierarquia ou permissão).")
-        except discord.HTTPException as e:
-            print("[ROLE ERROR] HTTPException ao criar role:", e)
-        except Exception as e:
-            print("[ROLE ERROR] Erro inesperado ao criar role:", e)
-        return None
-
-    except Exception as e:
-        print("[ROLE ERROR] Erro inesperado em safe_get_or_create_role:", e)
-        return None
-
 async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membros_list: list):
     for m_id in membros_list:
         try:
@@ -295,6 +307,7 @@ async def aplicar_permissoes_ao_role(role: discord.Role, perms_list):
         print("[ROLE ERROR] Forbidden: bot não pode editar permissões do role (hierarquia ou permissão).")
     except Exception as e:
         print("[ROLE ERROR] Erro ao aplicar permissões ao role:", e)
+
 
 async def atualizar_ou_criar_role_da_familia(dono_key: str):
     """
