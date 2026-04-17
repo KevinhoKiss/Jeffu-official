@@ -13,6 +13,12 @@ try:
 except:
     MongoClient = None
 
+# coloque no topo do arquivo (ou perto de outras regex compiladas)
+BAD_WORDS_PATTERN = re.compile(
+    r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto)\b(?:.*(?:jeffu|<@!?\d+>))?",
+    re.IGNORECASE
+)
+
 # ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
 LOG_CHANNEL_ID = 1466542559730991164
@@ -1104,9 +1110,12 @@ async def on_message(message):
                 await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
                 return
 
-            if re.search(r"(cala boca|calaboca|clbc|cbc|fica quieto|quieto).*(jeffu)?", texto):
-                await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
-                return
+# substitua a verificação atual por isto dentro do on_message
+if BAD_WORDS_PATTERN.search(message.content or ""):
+    try:
+        await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
+    except Exception as e:
+        print("[REPLY WARN] Falha ao responder a mensagem:", e)
 
         # processa comandos normalmente (sempre)
         await bot.process_commands(message)
