@@ -395,6 +395,61 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
 
     return None
 
+async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
+    """
+    Remove o role 'Muted' do membro. Retorna True se removido com sucesso.
+    """
+    try:
+        if not guild or not member:
+            return False
+        role = discord.utils.get(guild.roles, name="Muted")
+        if not role:
+            return False
+        if role not in member.roles:
+            return True  # já não está mutado
+        try:
+            await member.remove_roles(role, reason="Unmuted pelo bot")
+            try:
+                await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado.")
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print("[UNMUTE ERROR] Falha ao remover role Muted do membro:", e)
+            return False
+    except Exception as e:
+        print("[UNMUTE ERROR] Erro inesperado em unmute_member:", e)
+        return False
+
+@bot.command(name="unmute")
+@commands.guild_only()
+@commands.has_permissions(manage_roles=True)
+async def cmd_unmute(ctx, membro: discord.Member = None):
+    """
+    Uso: !unmute @usuario
+    Remove o role 'Muted' do usuário mencionado.
+    """
+    if membro is None:
+        return await ctx.reply("❌ Mencione o usuário que deseja desmutar. Ex: `!unmute @usuario`", mention_author=False)
+
+    # checagem de hierarquia
+    bot_member = ctx.guild.me
+    muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
+    if muted_role and bot_member.top_role <= muted_role:
+        return await ctx.reply("❌ Não posso remover o mute: meu cargo está abaixo do cargo Muted.", mention_author=False)
+
+    try:
+        ok = await unmute_member(ctx.guild, membro)
+        if ok:
+            await ctx.reply(f"✅ {membro.mention} foi desmutado.", mention_author=False)
+        else:
+            await ctx.reply("⚠️ Não foi possível desmutar esse usuário (role Muted não encontrado ou erro).", mention_author=False)
+    except commands.MissingPermissions:
+        await ctx.reply("❌ Você não tem permissão para usar esse comando.", mention_author=False)
+    except Exception as e:
+        print("[CMD UNMUTE ERROR]", e)
+        await ctx.reply("❌ Ocorreu um erro ao tentar desmutar.", mention_author=False)
+
 # ==================== VIEWS E INTERAÇÕES ====================
 class AceitarView(discord.ui.View):
     def __init__(self, dono_id):
