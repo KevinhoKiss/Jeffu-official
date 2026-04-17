@@ -784,7 +784,7 @@ async def on_message(message: discord.Message):
             "onde estão os capítulos", "onde estao os capitulos"
         ]
         if any(frase in lower for frase in frases_capitulos):
-            await message.reply("<#1452799882149761144>", mention_author=False)
+            await message.reply("O <#1452799882149761144> serve para isso <:suspect:1466766825361641634>", mention_author=False)
             return
 
         # Interações dirigidas ao bot (DM ou menção)
