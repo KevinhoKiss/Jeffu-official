@@ -167,34 +167,83 @@ PERMS_FRIENDLY = {
 
 ALLOWED_PERMS = set(PERMS_FRIENDLY.values())
 
+# >>> NOVA FUNÇÃO <<<
+async def setup_muted_role(guild: discord.Guild, role: discord.Role):
+    """
+    Configura o cargo Muted em todos os canais do servidor,
+    negando envio de mensagens em texto e fala em voz.
+    """
+    for channel in guild.channels:
+        try:
+            if isinstance(channel, discord.TextChannel):
+                await channel.set_permissions(role, send_messages=False, add_reactions=False)
+            elif isinstance(channel, discord.VoiceChannel):
+                await channel.set_permissions(role, speak=False, connect=False)
+        except Exception as e:
+            print(f"[MUTE SETUP WARN] Falha ao configurar canal {channel.name}: {e}")
+
+async def get_or_create_muted_role(guild: discord.Guild):
+    """
+    Garante que exista um cargo 'Muted' com permissões negadas
+    e aplica essas permissões em todos os canais.
+    """
+    role = discord.utils.get(guild.roles, name="Muted")
+    perms = discord.Permissions.none()
+    perms.update(send_messages=False, speak=False, add_reactions=False,
+                 attach_files=False, embed_links=False)
+
+    if role:
+        await role.edit(permissions=perms)
+        await setup_muted_role(guild, role)   # <<< chamada aqui
+        return role
+
+    # se não existe, cria
+    if not guild.me.guild_permissions.manage_roles:
+        print("[MUTE ERROR] Bot não tem Manage Roles; não é possível criar Muted role.")
+        return None
+
+    role = await guild.create_role(name="Muted", permissions=perms,
+                                   reason="Role de mute criado pelo bot")
+    print(f"[MUTE OK] Role Muted criado: {role} (id={role.id})")
+    await setup_muted_role(guild, role)       # <<< chamada aqui
+    return role
+
 async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
     """
     Cria ou reutiliza um cargo com logs e checagem de permissão Manage Roles.
     """
     try:
-        # checa permissão Manage Roles
-        try:
-            if not guild.me.guild_permissions.manage_roles:
-                print("[ROLE ERROR] Bot não tem Manage Roles no servidor.")
-                return None
-        except Exception as e:
-            print("[ROLE ERROR] Erro ao checar permissões:", e)
+        if not guild.me.guild_permissions.manage_roles:
+            print("[ROLE ERROR] Bot não tem Manage Roles no servidor.")
             return None
 
-        # tenta reutilizar role existente pelo nome
-        try:
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role:
-                # tenta atualizar cor se fornecida
-                if color_int is not None:
-                    try:
-                        await role.edit(colour=discord.Colour(color_int))
-                    except Exception as e:
-                        print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
-                print(f"[ROLE OK] Reutilizando role existente: {role.name} (id={role.id})")
-                return role
-        except Exception as e:
-            print("[ROLE ERROR] Erro ao procurar role existente:", e)
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role:
+            if color_int is not None:
+                try:
+                    await role.edit(colour=discord.Colour(color_int))
+                except Exception as e:
+                    print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
+            print(f"[ROLE OK] Reutilizando role existente: {role.name} (id={role.id})")
+            return role
+
+        if color_int is not None:
+            role = await guild.create_role(name=role_name,
+                                           colour=discord.Colour(color_int),
+                                           reason="Criado pelo sistema de famílias")
+        else:
+            role = await guild.create_role(name=role_name,
+                                           reason="Criado pelo sistema de famílias")
+        print(f"[ROLE OK] Role criado: {role} (id={role.id})")
+        return role
+
+    except discord.Forbidden:
+        print("[ROLE ERROR] Forbidden: bot não pode criar/editar roles.")
+    except discord.HTTPException as e:
+        print("[ROLE ERROR] HTTPException ao criar role:", e)
+    except Exception as e:
+        print("[ROLE ERROR] Erro inesperado ao criar role:", e)
+    return None
 
         # cria novo role
         try:
@@ -798,7 +847,6 @@ INVITE_REGEX = re.compile(r"(discord(?:\.gg|app\.com\/invite)\/[A-Za-z0-9\-]+)",
 @bot.event
 async def on_message(message: discord.Message):
     try:
-        # ignora mensagens do bot
         if message.author.bot:
             return
 
@@ -806,7 +854,7 @@ async def on_message(message: discord.Message):
         is_dm = isinstance(message.channel, discord.DMChannel)
         mentions_bot = bot.user and (bot.user.mentioned_in(message))
 
-        # --- REGRAS QUE DEVEM RODAR SEMPRE (mesmo sem menção) ---
+        # --- REGRAS SEMPRE ---
         palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
         if any(p in texto for p in palavras_chave):
             await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
@@ -831,33 +879,32 @@ async def on_message(message: discord.Message):
             await message.reply("<#1452799882149761144>", mention_author=False)
             return
 
-        # checa convites externos e age com moderação (deleta + log)
-        try:
-            if INVITE_REGEX.search(message.content or ""):
-                try:
-                    await message.delete()
-                except Exception as e:
-                    print("[MOD WARN] Falha ao deletar mensagem com invite:", e)
-                guild = message.guild
-                info = f"⚠️ Mensagem com invite removida de {message.author.mention} ({message.author.id}) no canal {message.channel.mention if message.channel else 'DM'}: {message.content}"
-                print(info)
-                try:
-                    if guild:
-                        await log(guild, info)
-                        mod_channel = guild.get_channel(LOG_CHANNEL_ID)
-                        if mod_channel:
-                            await mod_channel.send(f"{info}\nAção recomendada: revisar e aplicar sanções manuais se necessário.")
-                except Exception:
-                    pass
-                return
-        except Exception as e:
-            print("[ON_MESSAGE WARN] Erro ao checar invites:", e)
+        # --- DETECÇÃO DE INVITES ---
+        if INVITE_REGEX.search(message.content or ""):
+            try:
+                await message.delete()
+            except Exception as e:
+                print("[MOD WARN] Falha ao deletar mensagem com invite:", e)
 
-        # --- INTERAÇÕES que devem ocorrer apenas quando a mensagem for dirigida ao bot ---
+            guild = message.guild
+            if guild:
+                membro = guild.get_member(message.author.id)
+                if membro:
+                    await mute_member(guild, membro)
+
+                aviso = (
+                    f"⚠️ Invite removido!\n"
+                    f"Usuário: {message.author.mention} ({message.author.id})\n"
+                    f"Canal: {message.channel.mention if message.channel else 'DM'}\n"
+                    f"Conteúdo: {message.content}"
+                )
+                await log(guild, aviso)
+            return
+
+        # --- INTERAÇÕES PESSOAIS ---
         should_respond_personal = is_dm or mentions_bot
 
         if should_respond_personal:
-            # SAUDAÇÕES
             saudacoes = {
                 "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
                 "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
@@ -868,7 +915,6 @@ async def on_message(message: discord.Message):
                     await message.reply(saudacoes[chave], mention_author=False)
                     return
 
-            # INTERAÇÕES
             if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
                 await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
                 return
@@ -881,7 +927,7 @@ async def on_message(message: discord.Message):
                 await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
                 return
 
-        # processa comandos normalmente (sempre)
+        # processa comandos normalmente
         await bot.process_commands(message)
 
     except Exception as e:
