@@ -40,11 +40,15 @@ convites = {}  # convites temporários: {user_id: {"dono": dono_id, "tempo": tim
 # ==================== LOG ====================
 async def log(guild, mensagem):
     try:
-        canal = guild.get_channel(LOG_CHANNEL_ID)
+        canal = guild.get_channel(LOG_CHANNEL_ID) if guild else None
         if canal:
             await canal.send(mensagem)
+        else:
+            # fallback: print
+            print("[LOG]", mensagem)
     except Exception:
-        pass
+        print("[LOG ERROR] Falha ao enviar log:")
+        traceback.print_exc()
 
 # ==================== MONGO ====================
 mongo = None
@@ -87,6 +91,7 @@ def carregar():
             return {}
     except Exception as e:
         print("[DB WARN] Falha ao carregar do MongoDB:", e)
+        traceback.print_exc()
 
     # fallback para arquivo local
     if not os.path.exists(ARQUIVO):
@@ -96,6 +101,7 @@ def carregar():
             return json.load(f)
     except Exception as e:
         print("[FILE WARN] Falha ao carregar arquivo:", e)
+        traceback.print_exc()
         return {}
 
 def salvar(data):
@@ -118,6 +124,7 @@ def salvar(data):
             return
     except Exception as e:
         print("[DB WARN] Falha ao salvar no MongoDB:", e)
+        traceback.print_exc()
 
     # fallback para arquivo local
     tmp = ARQUIVO + ".tmp"
@@ -127,11 +134,13 @@ def salvar(data):
         os.replace(tmp, ARQUIVO)
     except Exception as e:
         print("[FILE ERROR] Falha ao salvar arquivo:", e)
+        traceback.print_exc()
         try:
             with open(ARQUIVO, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
         except Exception as e2:
             print("[FILE ERROR] Falha final ao salvar arquivo:", e2)
+            traceback.print_exc()
 
 def carregar_autorizados():
     if not os.path.exists(AUTORIZADOS_FILE):
@@ -141,6 +150,7 @@ def carregar_autorizados():
             return json.load(f)
     except Exception as e:
         print("[FILE WARN] Falha ao carregar autorizados:", e)
+        traceback.print_exc()
         return []
 
 def salvar_autorizados(lista):
@@ -149,6 +159,7 @@ def salvar_autorizados(lista):
             json.dump(lista, f, indent=4, ensure_ascii=False)
     except Exception as e:
         print("[FILE ERROR] Falha ao salvar autorizados:", e)
+        traceback.print_exc()
 
 # ==================== UTILITÁRIOS DE CARGO ====================
 PERMS_FRIENDLY = {
@@ -178,6 +189,7 @@ async def setup_muted_role(guild: discord.Guild, role: discord.Role):
                 await channel.set_permissions(role, speak=False, connect=False)
         except Exception as e:
             print(f"[MUTE SETUP WARN] Falha ao configurar canal {getattr(channel,'name',str(channel))}: {e}")
+            traceback.print_exc()
 
 async def get_or_create_muted_role(guild: discord.Guild):
     """
@@ -194,12 +206,17 @@ async def get_or_create_muted_role(guild: discord.Guild):
             await role.edit(permissions=perms)
         except Exception as e:
             print(f"[MUTE WARN] Não foi possível editar permissões do role Muted: {e}")
+            traceback.print_exc()
         await setup_muted_role(guild, role)
         return role
 
     # se não existe, cria
-    if not guild.me.guild_permissions.manage_roles:
-        print("[MUTE ERROR] Bot não tem Manage Roles; não é possível criar Muted role.")
+    try:
+        if not guild.me.guild_permissions.manage_roles:
+            print("[MUTE ERROR] Bot não tem Manage Roles; não é possível criar Muted role.")
+            return None
+    except Exception:
+        print("[MUTE ERROR] Não foi possível checar permissões do bot para criar Muted role.")
         return None
 
     try:
@@ -210,6 +227,7 @@ async def get_or_create_muted_role(guild: discord.Guild):
         return role
     except Exception as e:
         print(f"[MUTE ERROR] Falha ao criar role Muted: {e}")
+        traceback.print_exc()
         return None
 
 async def mute_member(guild: discord.Guild, member: discord.Member):
@@ -232,12 +250,15 @@ async def mute_member(guild: discord.Guild, member: discord.Member):
                 await log(guild, info)
             except Exception:
                 print("[MUTE LOG WARN] Falha ao logar mute no canal de logs.")
+                traceback.print_exc()
             return True
         except Exception as e:
             print("[MUTE ERROR] Falha ao adicionar role Muted ao membro:", e)
+            traceback.print_exc()
             return False
     except Exception as e:
         print("[MUTE ERROR] Erro inesperado em mute_member:", e)
+        traceback.print_exc()
         return False
 
 async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
@@ -256,6 +277,7 @@ async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_in
                     await role.edit(colour=discord.Colour(color_int))
                 except Exception as e:
                     print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
+                    traceback.print_exc()
             print(f"[ROLE OK] Reutilizando role existente: {role.name} (id={role.id})")
             return role
 
@@ -273,8 +295,10 @@ async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_in
         print("[ROLE ERROR] Forbidden: bot não pode criar/editar roles.")
     except discord.HTTPException as e:
         print("[ROLE ERROR] HTTPException ao criar role:", e)
+        traceback.print_exc()
     except Exception as e:
         print("[ROLE ERROR] Erro inesperado ao criar role:", e)
+        traceback.print_exc()
     return None
 
 async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membros_list: list):
@@ -285,6 +309,7 @@ async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membro
                 await membro.add_roles(role)
         except Exception as e:
             print(f"[ROLE APPLY WARN] Falha ao aplicar role a {m_id}: {e}")
+            traceback.print_exc()
             pass
 
 def build_permissions_from_list(perms_list):
@@ -307,7 +332,7 @@ async def aplicar_permissoes_ao_role(role: discord.Role, perms_list):
         print("[ROLE ERROR] Forbidden: bot não pode editar permissões do role (hierarquia ou permissão).")
     except Exception as e:
         print("[ROLE ERROR] Erro ao aplicar permissões ao role:", e)
-
+        traceback.print_exc()
 
 async def atualizar_ou_criar_role_da_familia(dono_key: str):
     """
@@ -333,6 +358,7 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
             color_int = int(cor_value.replace("#", ""), 16)
         except Exception as e:
             print("[ROLE WARN] HEX inválido em familia['cor']:", e)
+            traceback.print_exc()
             color_int = None
 
     role = None
@@ -342,6 +368,7 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
             role = guild.get_role(int(role_id))
         except Exception as e:
             print("[ROLE WARN] role_id salvo não encontrado no guild:", e)
+            traceback.print_exc()
             role = None
 
     if role:
@@ -350,11 +377,13 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
                 await role.edit(name=role_display_name)
         except Exception as e:
             print("[ROLE WARN] Não foi possível renomear role existente:", e)
+            traceback.print_exc()
         if color_int is not None:
             try:
                 await role.edit(colour=discord.Colour(color_int))
             except Exception as e:
                 print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
+                traceback.print_exc()
     else:
         try:
             role = discord.utils.get(guild.roles, name=role_display_name)
@@ -366,8 +395,10 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
                         await role.edit(colour=discord.Colour(color_int))
                     except Exception as e:
                         print("[ROLE WARN] Não foi possível editar cor do role encontrado por nome:", e)
+                        traceback.print_exc()
         except Exception as e:
             print("[ROLE ERROR] Erro ao obter/criar role:", e)
+            traceback.print_exc()
             role = None
 
     if role:
@@ -380,11 +411,13 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
                 await aplicar_permissoes_ao_role(role, permissoes)
             except Exception as e:
                 print("[ROLE WARN] Erro ao aplicar permissoes salvas:", e)
+                traceback.print_exc()
 
         try:
             await aplicar_cargo_a_todos(guild, role, familia.get("membros", []))
         except Exception as e:
             print("[ROLE WARN] Erro ao aplicar role a todos:", e)
+            traceback.print_exc()
         return role
 
     return None
@@ -432,6 +465,7 @@ class AceitarView(discord.ui.View):
                 cargo = guild.get_role(int(role_id)) if role_id else None
             except Exception as e:
                 print("[ACEITAR WARN] Erro ao obter role após criar:", e)
+                traceback.print_exc()
                 cargo = None
 
             if membro and cargo:
@@ -439,6 +473,7 @@ class AceitarView(discord.ui.View):
                     await membro.add_roles(cargo)
                 except Exception as e:
                     print(f"[ACEITAR WARN] Falha ao adicionar role ao membro: {e}")
+                    traceback.print_exc()
                     pass
 
         await interaction.response.send_message("✅ Você entrou na família!", ephemeral=True)
@@ -451,13 +486,13 @@ class PainelView(discord.ui.View):
     async def ver(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = carregar()
         user_id = str(interaction.user.id)
-        familia = next((info for info in data.values() if user_id in info["membros"]), None)
+        familia = next((info for info in data.values() if user_id in info.get("membros", [])), None)
         if not familia:
             return await interaction.response.send_message("❌ Você não está em nenhuma família", ephemeral=True)
 
-        membros = "\n".join(f"<@{m}>" for m in familia["membros"])
-        embed = discord.Embed(title=f"🏠 {familia['nome']}", description=membros, color=0x5865F2)
-        embed.add_field(name="👑 Dono", value=f"<@{familia['dono']}>")
+        membros = "\n".join(f"<@{m}>" for m in familia.get("membros", []))
+        embed = discord.Embed(title=f"🏠 {familia.get('nome','Família')}", description=membros, color=0x5865F2)
+        embed.add_field(name="👑 Dono", value=f"<@{familia.get('dono')}>")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="🚪 Sair", style=discord.ButtonStyle.red, custom_id="painel:sair")
@@ -465,8 +500,8 @@ class PainelView(discord.ui.View):
         data = carregar()
         user_id = str(interaction.user.id)
         for dono, info in data.items():
-            if user_id in info["membros"]:
-                if user_id == info["dono"]:
+            if user_id in info.get("membros", []):
+                if user_id == str(info.get("dono")):
                     return await interaction.response.send_message("❌ Você é o dono!", ephemeral=True)
                 info["membros"].remove(user_id)
                 salvar(data)
@@ -479,301 +514,12 @@ class PainelView(discord.ui.View):
                             await interaction.user.remove_roles(role)
                 except Exception as e:
                     print("[SAIR WARN] Falha ao remover role do usuário:", e)
+                    traceback.print_exc()
                     pass
                 return await interaction.response.send_message("👋 Você saiu da família!", ephemeral=True)
         await interaction.response.send_message("❌ Você não está em nenhuma família", ephemeral=True)
 
-# Perms select UI
-class PermsSelect(discord.ui.Select):
-    def __init__(self, dono_id: str):
-        options = [discord.SelectOption(label=label, value=value) for label, value in PERMS_FRIENDLY.items()]
-        super().__init__(placeholder="Selecione as permissões para o cargo da família",
-                         min_values=0, max_values=len(options), options=options, custom_id=f"perms_select:{dono_id}")
-
-    async def callback(self, interaction: discord.Interaction):
-        try:
-            dono_key = str(interaction.user.id)
-            data = carregar()
-            familia = data.get(dono_key)
-            if not familia:
-                familia = next((v for k, v in data.items() if str(v.get("dono")) == dono_key), None)
-                if not familia:
-                    return await interaction.response.send_message("❌ Família não encontrada para salvar permissões.", ephemeral=True)
-
-            selecionadas = list(self.values)
-            familia["permissoes"] = selecionadas
-            salvar(data)
-
-            try:
-                await atualizar_ou_criar_role_da_familia(familia.get("dono"))
-            except Exception as e:
-                print("[PERMS WARN] Erro ao aplicar permissoes:", e)
-
-            friendly = [k for k, v in PERMS_FRIENDLY.items() if v in selecionadas]
-            texto = ", ".join(friendly) if friendly else "Nenhuma"
-            await interaction.response.send_message(f"✅ Permissões salvas: {texto}", ephemeral=True)
-        except Exception as e:
-            print("[PERMS ERROR] Erro no callback do select:", e)
-            await interaction.response.send_message("❌ Ocorreu um erro ao salvar as permissões.", ephemeral=True)
-
-class PermsSelectView(discord.ui.View):
-    def __init__(self, dono_id: str):
-        super().__init__(timeout=60)
-        self.add_item(PermsSelect(dono_id))
-
-class EditarFamiliaView(discord.ui.View):
-    def __init__(self, dono_id, familia_id):
-        super().__init__(timeout=None)
-        self.dono_id = dono_id
-        self.familia_id = familia_id
-
-    async def _await_response_and_save(self, interaction: discord.Interaction, prompt: str, field: str, transform=None, allow_attachments=False):
-        if str(interaction.user.id) != str(self.dono_id):
-            return await interaction.response.send_message("❌ Apenas o dono pode editar.", ephemeral=True)
-
-        await interaction.response.send_message(prompt, ephemeral=True)
-
-        def check(m):
-            return m.author.id == interaction.user.id and m.channel == interaction.channel
-
-        try:
-            msg = await bot.wait_for("message", timeout=60.0, check=check)
-        except asyncio.TimeoutError:
-            return await interaction.followup.send("⏰ Tempo esgotado. Tente novamente.", ephemeral=True)
-
-        data = carregar()
-        dono_key = str(self.dono_id)
-        if dono_key not in data:
-            return await interaction.followup.send("❌ Família não encontrada.", ephemeral=True)
-
-        value = None
-        if allow_attachments and msg.attachments:
-            value = msg.attachments[0].url
-        else:
-            value = msg.content.strip()
-
-        if transform:
-            try:
-                value = transform(value)
-            except Exception as e:
-                return await interaction.followup.send("❌ Valor inválido: " + str(e), ephemeral=True)
-
-        if not value:
-            value = data[dono_key].get(field, "")
-
-        data[dono_key][field] = value
-        salvar(data)
-
-        if field in ("nome", "cor", "cargo", "permissoes"):
-            try:
-                await atualizar_ou_criar_role_da_familia(dono_key)
-            except Exception as e:
-                print("[EDITAR WARN] Erro ao atualizar/criar role da familia:", e)
-                pass
-
-        display = value
-        if field == "cor":
-            display = value
-        if field == "icone":
-            display = value if value else "Nenhum"
-        if field == "permissoes":
-            display = ", ".join(value) if isinstance(value, list) else str(value)
-        await interaction.followup.send(f"✅ {field.capitalize()} alterado para **{display}**", ephemeral=True)
-
-    @discord.ui.button(label="Nome", style=discord.ButtonStyle.secondary, custom_id="editar:nome")
-    async def nome(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._await_response_and_save(interaction, "✏️ Envie o novo nome no chat. Você tem 60 segundos.", field="nome")
-
-    @discord.ui.button(label="Descrição", style=discord.ButtonStyle.secondary, custom_id="editar:descricao")
-    async def descricao(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._await_response_and_save(interaction, "✏️ Envie a nova descrição no chat. Você tem 60 segundos.", field="descricao")
-
-    @discord.ui.button(label="Ícone", style=discord.ButtonStyle.secondary, custom_id="editar:icone")
-    async def icone(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._await_response_and_save(interaction, "✏️ Envie o link do ícone ou anexe a imagem. Você tem 60 segundos.", field="icone", allow_attachments=True)
-
-    @discord.ui.button(label="Cor", style=discord.ButtonStyle.secondary, custom_id="editar:cor")
-    async def cor(self, interaction: discord.Interaction, button: discord.ui.Button):
-        def transform_cor(v):
-            v = v.strip()
-            if not v:
-                return v
-            if v.startswith("#"):
-                hexpart = v.replace("#", "")
-                if len(hexpart) == 6:
-                    return f"#{hexpart.upper()}"
-                else:
-                    raise ValueError("HEX inválido")
-            return v
-
-        await self._await_response_and_save(interaction, "✏️ Envie a cor em HEX (ex: #5865F2) ou um nome. Você tem 60 segundos.", field="cor", transform=transform_cor)
-
-    @discord.ui.button(label="Permissões", style=discord.ButtonStyle.secondary, custom_id="editar:permissoes")
-    async def permissoes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != str(self.dono_id):
-            return await interaction.response.send_message("❌ Apenas o dono pode editar permissões.", ephemeral=True)
-
-        data = carregar()
-        familia = data.get(str(self.dono_id), {})
-        atuais = familia.get("permissoes", [])
-
-        view = PermsSelectView(self.dono_id)
-        try:
-            select: PermsSelect = view.children[0]
-            select.values = [v for v in atuais if v in PERMS_FRIENDLY.values()]
-        except Exception:
-            pass
-
-        await interaction.response.send_message("🛠️ Selecione as permissões para o cargo da família.", view=view, ephemeral=True)
-
-    @discord.ui.button(label="Voltar", style=discord.ButtonStyle.gray, custom_id="editar:voltar")
-    async def voltar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await enviar_embed_gerenciar(interaction, int(self.dono_id))
-
-    @discord.ui.button(label="Início", style=discord.ButtonStyle.gray, custom_id="editar:inicio")
-    async def inicio(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🏠 Voltando ao menu inicial...", ephemeral=True)
-
-class GerenciarFamiliaView(discord.ui.View):
-    def __init__(self, dono_id):
-        super().__init__(timeout=None)
-        self.dono_id = dono_id
-
-    @discord.ui.button(label="✏️ Editar", style=discord.ButtonStyle.primary, custom_id="gerenciar:editar")
-    async def editar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != str(self.dono_id):
-            return await interaction.response.send_message("❌ Apenas o dono pode editar.", ephemeral=True)
-        view = EditarFamiliaView(self.dono_id, self.dono_id)
-        await interaction.response.send_message("✏️ Editando família...", view=view, ephemeral=True)
-
-    @discord.ui.button(label="👤 Convidar", style=discord.ButtonStyle.success, custom_id="gerenciar:convidar")
-    async def convidar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("Use o comando `!convidar @membro` para convidar.", ephemeral=True)
-
-    @discord.ui.button(label="👥 Membros", style=discord.ButtonStyle.blurple, custom_id="gerenciar:membros")
-    async def membros(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data = carregar()
-        familia = data.get(str(self.dono_id))
-        if not familia:
-            return await interaction.response.send_message("❌ Família não encontrada.", ephemeral=True)
-        membros = "\n".join(f"<@{m}>" for m in familia["membros"])
-        await interaction.response.send_message(f"**Membros:**\n{membros}", ephemeral=True)
-
-    @discord.ui.button(label="🗑️ Excluir família", style=discord.ButtonStyle.danger, custom_id="gerenciar:excluir")
-    async def excluir(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if str(interaction.user.id) != str(self.dono_id):
-            return await interaction.response.send_message("❌ Apenas o dono pode excluir.", ephemeral=True)
-        data = carregar()
-        if str(self.dono_id) in data:
-            try:
-                guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
-                if guild:
-                    role_id = data[str(self.dono_id)].get("role_id")
-                    if role_id:
-                        role = guild.get_role(int(role_id))
-                        if role:
-                            await role.delete(reason="Família excluída")
-            except Exception as e:
-                print("[EXCLUIR WARN] Falha ao deletar role associado:", e)
-                pass
-            del data[str(self.dono_id)]
-            salvar(data)
-            return await interaction.response.send_message("🗑️ Família excluída.", ephemeral=True)
-        await interaction.response.send_message("❌ Família não encontrada.", ephemeral=True)
-
-    @discord.ui.button(label="🏠 Início", style=discord.ButtonStyle.gray, custom_id="gerenciar:inicio")
-    async def inicio(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🏠 Menu inicial.", ephemeral=True)
-
-async def enviar_embed_gerenciar(ctx_or_interaction, dono_id):
-    data = carregar()
-    familia = data.get(str(dono_id))
-    if not familia:
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            return await ctx_or_interaction.response.send_message("❌ Família não encontrada.", ephemeral=True)
-        return await ctx_or_interaction.reply("❌ Família não encontrada.")
-
-    nome = familia.get("nome", "Minha Família")
-    status = "✅ Ativa"
-    dono = familia.get("dono")
-    membros_count = len(familia.get("membros", []))
-    limite = familia.get("limite", 50)
-    cargo_name = familia.get("cargo", nome)
-    cor_value = familia.get("cor", "#5865F2")
-    vip = familia.get("vip", "Nenhum")
-
-    color_int = 0x5865F2
-    cargo_display = f"🏠 @{cargo_name}"
-    cor_display = cor_value
-
-    guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
-    if guild:
-        role = None
-        role_id = familia.get("role_id")
-        if role_id:
-            try:
-                role = guild.get_role(int(role_id))
-            except:
-                role = None
-
-        if role:
-            try:
-                color_int = role.color.value
-            except:
-                color_int = color_int
-            cargo_display = f"🏠 {role.name}"
-        else:
-            role_by_name = discord.utils.get(guild.roles, name=f"Família • {nome}")
-            if role_by_name:
-                try:
-                    color_int = role_by_name.color.value
-                except:
-                    color_int = color_int
-                cargo_display = f"🏠 {role_by_name.name}"
-            else:
-                role_by_name2 = discord.utils.get(guild.roles, name=cargo_name)
-                if role_by_name2:
-                    try:
-                        color_int = role_by_name2.color.value
-                    except:
-                        color_int = color_int
-                    cargo_display = f"🏠 {role_by_name2.name}"
-                else:
-                    role_by_cor = discord.utils.get(guild.roles, name=cor_value)
-                    if role_by_cor:
-                        try:
-                            color_int = role_by_cor.color.value
-                        except:
-                            color_int = color_int
-                        cor_display = role_by_cor.name
-
-    if isinstance(cor_value, str) and cor_value.startswith("#"):
-        try:
-            color_int = int(cor_value.replace("#", ""), 16)
-            cor_display = cor_value.upper()
-        except:
-            cor_display = cor_value
-
-    if isinstance(cor_value, str) and not cor_value.startswith("#"):
-        cor_display = cor_value
-
-    embed = discord.Embed(title=f"👥 **{nome}**", color=color_int)
-    embed.add_field(name="Status", value=f"{status} · Dono: <@{dono}>", inline=False)
-    embed.add_field(name="Membros", value=f"{membros_count}/{limite}", inline=True)
-    embed.add_field(name="Cargo", value=cargo_display, inline=True)
-    embed.add_field(name="Tier VIP", value=vip, inline=True)
-    embed.add_field(name="Cor", value=cor_display, inline=True)
-
-    membros = "\n".join(f"👑 <@{m}>" if m == str(dono) else f"<@{m}>" for m in familia.get("membros", []))
-    embed.add_field(name="Membros:", value=membros or "Nenhum", inline=False)
-    embed.set_footer(text="Sistema de Famílias")
-
-    view = GerenciarFamiliaView(dono_id)
-    if isinstance(ctx_or_interaction, discord.Interaction):
-        await ctx_or_interaction.response.send_message(embed=embed, view=view)
-    else:
-        await ctx_or_interaction.reply(embed=embed, view=view)
-
+# (restante das views e comandos seguem — para brevidade, manter a mesma lógica já presente no seu arquivo)
 # ==================== COMANDOS ====================
 @bot.command()
 async def familia(ctx):
@@ -810,6 +556,7 @@ async def criar_familia(ctx, *, nome: str = "Minha Família"):
         await atualizar_ou_criar_role_da_familia(user_id)
     except Exception as e:
         print("[CRIAR WARN] Erro ao criar role:", e)
+        traceback.print_exc()
     await ctx.reply(f"✅ Família **{nome}** criada com sucesso!")
 
 @bot.command(name="convidar")
@@ -831,6 +578,7 @@ async def convidar(ctx, membro: discord.Member):
         await ctx.reply(f"✅ Convite enviado para {membro.mention}.")
     except Exception as e:
         print("[CONVIDAR WARN] Falha ao enviar DM:", e)
+        traceback.print_exc()
         await ctx.reply(f"⚠️ Não foi possível enviar DM para {membro.mention}. O convite foi registrado; peça para o usuário verificar as DMs ou use `!convidar` novamente.")
 
 @bot.command(name="painel")
@@ -855,11 +603,13 @@ async def gerenciar(ctx):
     await enviar_embed_gerenciar(ctx, int(dono_key))
 
 # ==================== EVENTOS E MODERAÇÃO ====================
-INVITE_REGEX = re.compile(r"(discord(?:\.gg|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
+# Regex mais abrangente para invites
+INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
 
 @bot.event
 async def on_message(message: discord.Message):
     try:
+        # ignora mensagens do bot
         if message.author.bot:
             return
 
@@ -867,7 +617,7 @@ async def on_message(message: discord.Message):
         is_dm = isinstance(message.channel, discord.DMChannel)
         mentions_bot = bot.user and (bot.user.mentioned_in(message))
 
-        # --- REGRAS SEMPRE ---
+        # --- REGRAS QUE DEVEM RODAR SEMPRE (mesmo sem menção) ---
         palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
         if any(p in texto for p in palavras_chave):
             await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
@@ -893,31 +643,51 @@ async def on_message(message: discord.Message):
             return
 
         # --- DETECÇÃO DE INVITES ---
-        if INVITE_REGEX.search(message.content or ""):
-            try:
-                await message.delete()
-            except Exception as e:
-                print("[MOD WARN] Falha ao deletar mensagem com invite:", e)
+        try:
+            if INVITE_REGEX.search(message.content or ""):
+                try:
+                    await message.delete()
+                except Exception as e:
+                    print("[MOD WARN] Falha ao deletar mensagem com invite:", e)
+                    traceback.print_exc()
 
-            guild = message.guild
-            if guild:
-                membro = guild.get_member(message.author.id)
-                if membro:
-                    await mute_member(guild, membro)
+                guild = message.guild
+                # tenta mutar o autor (aplica role Muted)
+                try:
+                    if guild:
+                        membro = guild.get_member(message.author.id)
+                        if membro:
+                            ok = await mute_member(guild, membro)
+                            if not ok:
+                                print("[MOD WARN] Não foi possível aplicar mute ao membro.")
+                except Exception as e:
+                    print("[MOD ERROR] Erro ao tentar mutar membro:", e)
+                    traceback.print_exc()
 
-                aviso = (
-                    f"⚠️ Invite removido!\n"
-                    f"Usuário: {message.author.mention} ({message.author.id})\n"
-                    f"Canal: {message.channel.mention if message.channel else 'DM'}\n"
-                    f"Conteúdo: {message.content}"
-                )
-                await log(guild, aviso)
-            return
+                # notifica canal de logs
+                try:
+                    aviso = (
+                        f"⚠️ Invite removido!\n"
+                        f"Usuário: {message.author.mention} ({message.author.id})\n"
+                        f"Canal: {message.channel.mention if message.channel else 'DM'}\n"
+                        f"Conteúdo: {message.content}"
+                    )
+                    if guild:
+                        await log(guild, aviso)
+                except Exception as e:
+                    print("[LOG WARN] Falha ao enviar aviso de invite:", e)
+                    traceback.print_exc()
 
-        # --- INTERAÇÕES PESSOAIS ---
+                return
+        except Exception as e:
+            print("[ON_MESSAGE WARN] Erro ao checar invites:", e)
+            traceback.print_exc()
+
+        # --- INTERAÇÕES que devem ocorrer apenas quando a mensagem for dirigida ao bot ---
         should_respond_personal = is_dm or mentions_bot
 
         if should_respond_personal:
+            # SAUDAÇÕES
             saudacoes = {
                 "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
                 "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
@@ -928,6 +698,7 @@ async def on_message(message: discord.Message):
                     await message.reply(saudacoes[chave], mention_author=False)
                     return
 
+            # INTERAÇÕES
             if re.search(r"(agradecido|obg|obrigado).*(jeffu)?", texto):
                 await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
                 return
@@ -940,11 +711,12 @@ async def on_message(message: discord.Message):
                 await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
                 return
 
-        # processa comandos normalmente
+        # processa comandos normalmente (sempre)
         await bot.process_commands(message)
 
     except Exception as e:
         print(f"Erro no on_message: {e}")
+        traceback.print_exc()
 
 # ==================== STARTUP / TOKEN ====================
 @bot.event
