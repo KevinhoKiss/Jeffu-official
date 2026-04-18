@@ -766,13 +766,11 @@ async def on_message(message: discord.Message):
             return
 
         # ===== GREETINGS: responder a qualquer mensagem que contenha saudação =====
-        # agora responde a "bom dia", "boa tarde", "boa noite" mesmo sem menção ao bot
         saudacoes = {
             "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
             "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
             "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
         }
-        # procura a primeira saudação presente no texto
         for chave, resposta in saudacoes.items():
             if chave in lower:
                 try:
@@ -780,7 +778,6 @@ async def on_message(message: discord.Message):
                 except Exception as e:
                     print("[GREET WARN] Falha ao enviar saudação:", e)
                     traceback.print_exc()
-                # responde apenas uma saudação por mensagem
                 return
 
         # REGRAS AUTOMÁTICAS (respostas rápidas)
@@ -814,7 +811,7 @@ async def on_message(message: discord.Message):
         should_respond_personal = is_dm or mentions_bot
 
         if should_respond_personal:
-            # agradecimentos e "te amo" agora exigem menção/substring 'jeffu'
+            # agradecimentos e "te amo" exigem menção/substring 'jeffu'
             if re.search(r"(agradecido|obg|obrigado)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
                 return
