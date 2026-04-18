@@ -133,6 +133,82 @@ def _crop_circle(img: Image.Image, size: int = 112) -> Image.Image:
     return out
 
 
+CHARACTER_ASSET_FILES = ('decor_character.png', '1ONXu.jpg')
+_character_asset_cache = None
+
+
+def _remove_light_background(img: Image.Image) -> Image.Image:
+    img = img.convert('RGBA')
+    w, h = img.size
+    px = img.load()
+
+    def is_light_bg(x: int, y: int) -> bool:
+        r, g, b, a = px[x, y]
+        bright = (int(r) + int(g) + int(b)) / 3
+        spread = max(r, g, b) - min(r, g, b)
+        return bright >= 180 and spread <= 35
+
+    bg = [[False for _ in range(w)] for _ in range(h)]
+    q = deque()
+    for x in range(w):
+        if is_light_bg(x, 0):
+            q.append((x, 0)); bg[0][x] = True
+        if is_light_bg(x, h - 1) and not bg[h - 1][x]:
+            q.append((x, h - 1)); bg[h - 1][x] = True
+    for y in range(h):
+        if is_light_bg(0, y) and not bg[y][0]:
+            q.append((0, y)); bg[y][0] = True
+        if is_light_bg(w - 1, y) and not bg[y][w - 1]:
+            q.append((w - 1, y)); bg[y][w - 1] = True
+
+    while q:
+        x, y = q.popleft()
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h and not bg[ny][nx] and is_light_bg(nx, ny):
+                bg[ny][nx] = True
+                q.append((nx, ny))
+
+    alpha = Image.new('L', (w, h), 255)
+    alpha_px = alpha.load()
+    for y in range(h):
+        for x in range(w):
+            if bg[y][x]:
+                alpha_px[x, y] = 0
+    alpha = alpha.filter(ImageFilter.GaussianBlur(1.2))
+    img.putalpha(alpha)
+    bbox = img.getbbox()
+    return img.crop(bbox) if bbox else img
+
+
+def _load_bottom_character() -> Image.Image | None:
+    global _character_asset_cache
+    if _character_asset_cache is not None:
+        return _character_asset_cache.copy()
+
+    chosen = None
+    for filename in CHARACTER_ASSET_FILES:
+        if os.path.exists(filename):
+            chosen = filename
+            break
+    if not chosen:
+        return None
+
+    try:
+        img = Image.open(chosen)
+        if chosen.lower().endswith('.png'):
+            img = img.convert('RGBA')
+            bbox = img.getbbox()
+            if bbox:
+                img = img.crop(bbox)
+        else:
+            img = _remove_light_background(img)
+        _character_asset_cache = img.convert('RGBA')
+        return _character_asset_cache.copy()
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
 async def _avatar_bytes(member) -> bytes | None:
     if not member:
         return None
@@ -214,8 +290,32 @@ def _draw_background(canvas: Image.Image):
     draw.rectangle((0, h - 78, w, h), fill=(12, 12, 16))
     draw.rectangle((0, h - 18, w, h), fill=(44, 28, 139))
     draw.line((0, h - 78, w, h - 78), fill=LOG_IMAGE_BLUE, width=2)
-    draw.ellipse((82, h - 128, 168, h - 54), fill=(85, 166, 222))
-    draw.ellipse((106, h - 118, 146, h - 82), fill=(130, 204, 240))
+
+    character = _load_bottom_character()
+    if character is not None:
+        target_h = 210
+        scale = target_h / max(1, character.height)
+        target_w = max(1, int(character.width * scale))
+        character = character.resize((target_w, target_h), Image.LANCZOS)
+
+        shadow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
+        shadow_draw = ImageDraw.Draw(shadow)
+        sx1 = 16
+        sy1 = h - 86
+        sx2 = 16 + min(target_w, 150)
+        sy2 = h - 46
+        shadow_draw.ellipse((sx1, sy1, sx2, sy2), fill=(0, 0, 0, 90))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(10))
+        canvas_rgba = canvas.convert('RGBA')
+        canvas_rgba = Image.alpha_composite(canvas_rgba, shadow)
+
+        x = 14
+        y = h - 78 - target_h + 8
+        canvas_rgba.paste(character, (x, y), character)
+        canvas.paste(canvas_rgba.convert('RGB'))
+    else:
+        draw.ellipse((82, h - 128, 168, h - 54), fill=(85, 166, 222))
+        draw.ellipse((106, h - 118, 146, h - 82), fill=(130, 204, 240))
 
 
 def _draw_blob(draw, x, y, fill, outline=None):
@@ -233,15 +333,15 @@ def _paste_glow(canvas: Image.Image, box, color, blur=24, alpha=115, radius=28):
 
 
 async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', message_text: str = '', accent=None) -> BytesIO:
-    width, height = 1400, 1200
+    width, height = 1000, 820
     accent = _accent_for_title(title, accent)
 
-    badge_font = _get_font(32, bold=True)
-    hero_font = _get_font(68, bold=True)
-    sub_font = _get_font(40, bold=False)
-    body_font = _get_font(40, bold=False)
-    label_font = _get_font(34, bold=True)
-    small_font = _get_font(28, bold=False)
+    badge_font = _get_font(22, bold=True)
+    hero_font = _get_font(52, bold=True)
+    sub_font = _get_font(30, bold=False)
+    body_font = _get_font(28, bold=False)
+    label_font = _get_font(24, bold=True)
+    small_font = _get_font(16, bold=False)
 
     name_text = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
     lines = [
@@ -252,10 +352,10 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
         ('Mensagem', message_text or 'sem mensagem'),
     ]
 
-    card_w = 1100
+    card_w = 860
     card_x = (width - card_w) // 2
     card_y = 96
-    avatar_size = 180
+    avatar_size = 170
     avatar_y = card_y + 22
     pill_top = avatar_y + avatar_size + 14
     sub_top = pill_top + 56
@@ -264,7 +364,7 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
     dummy_draw = ImageDraw.Draw(dummy)
     details_x1 = card_x + 34
     details_x2 = card_x + card_w - 34
-    body_max_w = details_x2 - details_x1 - 290
+    body_max_w = details_x2 - details_x1 - 220
     rendered = []
     for label, value in lines:
         wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w)
@@ -272,12 +372,12 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
             wrapped = ['']
         max_lines = 3 if label == 'Mensagem' else 2
         rendered.append((label, wrapped[:max_lines]))
-    line_h = 56
+    line_h = 36
     detail_rows = sum(len(v) for _, v in rendered)
-    details_y1 = sub_top + 90
-    content_h = 110 + detail_rows * line_h + 40
+    details_y1 = sub_top + 72
+    content_h = 80 + detail_rows * line_h + 28
     details_y2 = details_y1 + content_h
-    card_h = max(760, (details_y2 - card_y) + 60)
+    card_h = max(520, (details_y2 - card_y) + 40)
 
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
@@ -296,25 +396,25 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
     _draw_blob(draw, card_x + card_w - 126, card_y - 14, fill=accent, outline=LOG_IMAGE_CARD_BORDER)
 
     badge_text = (guild.name if guild else 'Discord')[:18]
-    badge_w = max(260, min(420, int(len(badge_text) * 20) + 120))
-    badge_h = 88
+    badge_w = max(180, min(300, int(len(badge_text) * 13) + 90))
+    badge_h = 64
     badge_x = card_x + 22
     badge_y = card_y + 18
     draw.rounded_rectangle((badge_x, badge_y, badge_x + badge_w, badge_y + badge_h), radius=18, fill=LOG_IMAGE_PILL)
     icon_raw = await _guild_icon_bytes(guild)
-    icon_size = 50
+    icon_size = 36
     if icon_raw:
         icon_img = _crop_circle(Image.open(BytesIO(icon_raw)), icon_size)
         canvas.paste(icon_img, (badge_x + 12, badge_y + 11), icon_img)
     else:
         draw.ellipse((badge_x + 12, badge_y + 11, badge_x + 46, badge_y + 45), fill=(88, 81, 148))
-    draw.text((badge_x + 76, badge_y + 14), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
-    draw.text((badge_x + 76, badge_y + 44), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
+    draw.text((badge_x + 56, badge_y + 10), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((badge_x + 56, badge_y + 30), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
 
-    cx = card_x + card_w - 82
-    cy = card_y + 50
-    draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=9)
-    draw.line((cx + 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=9)
+    cx = card_x + card_w - 62
+    cy = card_y + 36
+    draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
+    draw.line((cx + 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
 
     avatar_cx = card_x + card_w // 2
     avatar_ring_box = (avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10)
@@ -335,25 +435,25 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
     draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(14, 12, 32), width=4)
     draw.ellipse((avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10), outline=accent, width=2)
 
-    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Evento registrado', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=52, v_padding=18, radius=30, max_width=card_w - 220)
-    _draw_centered_pill(draw, avatar_cx, sub_top, name_text[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=40, v_padding=14, radius=24, max_width=card_w - 260)
+    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Evento registrado', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=36, v_padding=12, radius=24, max_width=card_w - 140)
+    _draw_centered_pill(draw, avatar_cx, sub_top, name_text[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=26, v_padding=10, radius=18, max_width=card_w - 160)
 
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
-    draw.text((details_x1 + 28, details_y1 + 22), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
-    draw.line((details_x1 + 28, details_y1 + 74, details_x2 - 28, details_y1 + 74), fill=LOG_IMAGE_LINE, width=2)
+    draw.text((details_x1 + 20, details_y1 + 16), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
+    draw.line((details_x1 + 20, details_y1 + 52, details_x2 - 20, details_y1 + 52), fill=LOG_IMAGE_LINE, width=1)
 
-    label_w = 220
-    y = details_y1 + 100
+    label_w = 145
+    y = details_y1 + 72
     for label, parts in rendered:
-        draw.text((details_x1 + 28, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
+        draw.text((details_x1 + 20, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
         inner_y = y
         for seg in parts:
-            draw.text((details_x1 + 28 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
+            draw.text((details_x1 + 20 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
             inner_y += line_h
         y = inner_y + 4
 
     stamp = datetime.now().strftime('%d/%m/%Y %H:%M')
-    draw.text((card_x + card_w - 260, card_y + card_h - 34), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((card_x + card_w - 150, card_y + card_h - 22), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
 
     bio = BytesIO()
     canvas.convert('RGB').save(bio, format='PNG')
