@@ -1305,6 +1305,17 @@ def detect_auto_reply(message: discord.Message):
     return best
 
 
+def humanize_intent(intent: str) -> str:
+    mapping = {
+        'greeting': 'saudação',
+        'support': 'suporte',
+        'site_status': 'status do site',
+        'obra_suggestion': 'sugestão de obra',
+        'missing_chapters': 'capítulos faltando',
+    }
+    return mapping.get(intent, intent.replace('_', ' '))
+
+
 def explain_reason(result: dict) -> str:
     parts = [f"intent={result['intent']}", f"score={result['score']}/{result.get('threshold', '?')}"]
     if result.get("context_used"):
@@ -1391,7 +1402,7 @@ async def on_message(message: discord.Message):
                         ok = await mute_member_with_duration(message.guild, membro, seconds=600)
                         if not ok:
                             print("[MOD WARN] Não foi possível aplicar mute automático.")
-                    await log(message.guild, member=message.author, title="Invite bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason="Invite detectado na mensagem", action="Mensagem removida e mute de 10 minutos aplicado", message_text=(message.content or "sem mensagem"))
+                    await log(message.guild, member=message.author, title="Convite bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason="Convite detectado na mensagem", action="Mensagem removida e mute de 10 minutos aplicado", message_text=(message.content or "sem mensagem"))
             except Exception as e:
                 print("[BLOQUEIO WARN] Erro ao processar invite:", e)
                 traceback.print_exc()
@@ -1408,7 +1419,7 @@ async def on_message(message: discord.Message):
                 if cd["user_wait"] > 0:
                     why_blocked.append(f"cooldown_usuario={cd['user_wait']}s")
                 if message.guild:
-                    await log(message.guild, member=message.author, title="Auto-reply bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Cooldown ativo: {' ; '.join(why_blocked)}", action=f"Resposta da intent {result['intent']} não foi enviada", message_text=(message.content or "sem mensagem"))
+                    await log(message.guild, member=message.author, title="Resposta automática bloqueada", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Cooldown ativo: {' ; '.join(why_blocked)}", action=f"Resposta da intenção {humanize_intent(result['intent'])} não foi enviada", message_text=(message.content or "sem mensagem"))
             else:
                 remember_context(message, result["intent"], result["score"], result["matched_groups"], result["reply"])
                 mark_cooldown(message, result["intent"])
@@ -1418,7 +1429,7 @@ async def on_message(message: discord.Message):
                     print("[AUTO-REPLY WARN] Falha ao enviar resposta automática:", e)
                     traceback.print_exc()
                 if message.guild:
-                    await log(message.guild, member=message.author, title="Auto-reply enviado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Intent detectada: {result['intent']}", action="Resposta automática enviada com sucesso", message_text=(message.content or "sem mensagem"))
+                    await log(message.guild, member=message.author, title="Resposta automática enviada", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Intenção detectada: {humanize_intent(result['intent'])}", action="Resposta automática enviada com sucesso", message_text=(message.content or "sem mensagem"))
                 return
 
         # Interações dirigidas ao bot (DM ou menção)
