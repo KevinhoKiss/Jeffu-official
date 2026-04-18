@@ -7,6 +7,8 @@ import re
 import json
 import time
 import asyncio
+import unicodedata
+from collections import defaultdict, deque
 
 try:
     from pymongo import MongoClient
@@ -35,6 +37,11 @@ ARQUIVO = "familias.json"
 AUTORIZADOS_FILE = "autorizados.json"
 
 convites = {}  # convites temporários: {user_id: {"dono": dono_id, "tempo": timestamp}}
+
+# ==================== CONFIG DE RESPOSTAS CONTEXTUAIS ====================
+COOLDOWN_INTENT_SECONDS = 45       # mesmo intent no mesmo canal
+COOLDOWN_USER_INTENT_SECONDS = 25  # mesmo intent pelo mesmo usuário no canal
+CONTEXT_MAX_AGE_SECONDS = 180      # contexto recente considerado válido
 
 # ==================== LOG ====================
 async def log(guild: discord.Guild, mensagem: str):
@@ -96,6 +103,7 @@ def carregar():
         traceback.print_exc()
         return {}
 
+
 def salvar(data):
     if not isinstance(data, dict):
         print("[SAVE ERROR] Dados a salvar não são um dict. Abortando.")
@@ -124,6 +132,7 @@ def salvar(data):
             print("[FILE ERROR] Falha final ao salvar arquivo:", e2)
             traceback.print_exc()
 
+
 def carregar_autorizados():
     if not os.path.exists(AUTORIZADOS_FILE):
         return []
@@ -134,6 +143,7 @@ def carregar_autorizados():
         print("[FILE WARN] Falha ao carregar autorizados:", e)
         traceback.print_exc()
         return []
+
 
 def salvar_autorizados(lista):
     try:
@@ -158,6 +168,7 @@ PERMS_FRIENDLY = {
 }
 ALLOWED_PERMS = set(PERMS_FRIENDLY.values())
 
+
 async def setup_muted_role(guild: discord.Guild, role: discord.Role):
     for channel in guild.channels:
         try:
@@ -175,6 +186,7 @@ async def setup_muted_role(guild: discord.Guild, role: discord.Role):
         except Exception as e:
             print(f"[MUTE SETUP WARN] Falha ao configurar canal {getattr(channel,'name',str(channel))}: {e}")
             traceback.print_exc()
+
 
 async def get_or_create_muted_role(guild: discord.Guild):
     role = discord.utils.get(guild.roles, name="Muted")
@@ -200,7 +212,8 @@ async def get_or_create_muted_role(guild: discord.Guild):
         return role
 
     try:
-        if not guild.me.guild_permissions.manage_roles:
+        bot_member = guild.me or (guild.get_member(bot.user.id) if bot.user else None)
+        if not bot_member or not bot_member.guild_permissions.manage_roles:
             print("[MUTE ERROR] Bot não tem Manage Roles; não é possível criar Muted role.")
             return None
     except Exception:
@@ -216,6 +229,7 @@ async def get_or_create_muted_role(guild: discord.Guild):
         print(f"[MUTE ERROR] Falha ao criar role Muted: {e}")
         traceback.print_exc()
         return None
+
 
 async def mute_member(guild: discord.Guild, member: discord.Member):
     try:
@@ -243,9 +257,11 @@ async def mute_member(guild: discord.Guild, member: discord.Member):
         traceback.print_exc()
         return False
 
+
 async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
     try:
-        if not guild.me.guild_permissions.manage_roles:
+        bot_member = guild.me or (guild.get_member(bot.user.id) if bot.user else None)
+        if not bot_member or not bot_member.guild_permissions.manage_roles:
             print("[ROLE ERROR] Bot não tem Manage Roles no servidor.")
             return None
 
@@ -286,6 +302,7 @@ async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_in
         traceback.print_exc()
         return None
 
+
 async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membros_list: list):
     for m_id in membros_list:
         try:
@@ -296,6 +313,7 @@ async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membro
             print(f"[ROLE APPLY WARN] Falha ao aplicar role a {m_id}: {e}")
             traceback.print_exc()
             pass
+
 
 def build_permissions_from_list(perms_list):
     perms = discord.Permissions.none()
@@ -308,6 +326,7 @@ def build_permissions_from_list(perms_list):
                 pass
     return perms
 
+
 async def aplicar_permissoes_ao_role(role: discord.Role, perms_list):
     try:
         perms = build_permissions_from_list(perms_list)
@@ -318,6 +337,7 @@ async def aplicar_permissoes_ao_role(role: discord.Role, perms_list):
     except Exception as e:
         print("[ROLE ERROR] Erro ao aplicar permissões ao role:", e)
         traceback.print_exc()
+
 
 async def atualizar_ou_criar_role_da_familia(dono_key: str):
     data = carregar()
@@ -408,6 +428,7 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
 MUTES_FILE = "active_mutes.json"
 _active_mutes = {}
 
+
 def _load_mutes():
     global _active_mutes
     try:
@@ -421,6 +442,7 @@ def _load_mutes():
         traceback.print_exc()
         _active_mutes = {}
 
+
 def _save_mutes():
     try:
         with open(MUTES_FILE + ".tmp", "w", encoding="utf-8") as f:
@@ -430,7 +452,9 @@ def _save_mutes():
         print("[MUTE PERSIST WARN] Falha ao salvar mutes:", e)
         traceback.print_exc()
 
+
 _load_mutes()
+
 
 async def _schedule_unmute(guild_id: int, member_id: int, delay_seconds: int):
     await asyncio.sleep(delay_seconds)
@@ -461,6 +485,7 @@ async def _schedule_unmute(guild_id: int, member_id: int, delay_seconds: int):
     except Exception as e:
         print("[SCHEDULE UNMUTE ERROR]", e)
         traceback.print_exc()
+
 
 async def mute_member_with_duration(guild: discord.Guild, member: discord.Member, seconds: int = 600) -> bool:
     try:
@@ -548,6 +573,7 @@ async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
         traceback.print_exc()
         return False
 
+
 @bot.command(name="unmute")
 @commands.guild_only()
 @commands.has_permissions(manage_roles=True)
@@ -555,9 +581,9 @@ async def cmd_unmute(ctx, membro: discord.Member = None):
     if membro is None:
         return await ctx.reply("❌ Mencione o usuário que deseja desmutar. Ex: `!unmute @usuario`", mention_author=False)
 
-    bot_member = ctx.guild.me
+    bot_member = ctx.guild.me or (ctx.guild.get_member(bot.user.id) if bot.user else None)
     muted_role = discord.utils.get(ctx.guild.roles, name="Muted")
-    if muted_role and bot_member.top_role <= muted_role:
+    if muted_role and bot_member and bot_member.top_role <= muted_role:
         return await ctx.reply("❌ Não posso remover o mute: meu cargo está abaixo do cargo Muted.", mention_author=False)
 
     try:
@@ -577,6 +603,7 @@ async def cmd_unmute(ctx, membro: discord.Member = None):
 REACTIONS_FILE = "reactions_rules.json"
 _reaction_rules = {}
 
+
 def _load_reaction_rules():
     global _reaction_rules
     try:
@@ -590,6 +617,7 @@ def _load_reaction_rules():
         traceback.print_exc()
         _reaction_rules = {}
 
+
 def _save_reaction_rules():
     try:
         tmp = REACTIONS_FILE + ".tmp"
@@ -600,13 +628,16 @@ def _save_reaction_rules():
         print("[REACTIONS WARN] Falha ao salvar regras:", e)
         traceback.print_exc()
 
+
 _load_reaction_rules()
+
 
 def _ensure_guild_rules(guild_id: int):
     gk = str(guild_id)
     if gk not in _reaction_rules:
         _reaction_rules[gk] = {"by_message": {}, "by_keyword": []}
     return _reaction_rules[gk]
+
 
 async def _try_add_reaction(message: discord.Message, emoji: str):
     try:
@@ -640,6 +671,7 @@ DEFAULT_KEYWORD_RULES = [
     }
 ]
 
+
 def _ensure_default_rules_for_all_guilds():
     for guild in bot.guilds:
         gk = str(guild.id)
@@ -650,7 +682,7 @@ def _ensure_default_rules_for_all_guilds():
             for kw in rule["keywords"]:
                 found = False
                 for ex in existing:
-                    if ex.get("keyword","").lower() == kw.lower() and set(ex.get("emojis",[])) == set(rule["emojis"]):
+                    if ex.get("keyword", "").lower() == kw.lower() and set(ex.get("emojis", [])) == set(rule["emojis"]):
                         found = True
                         break
                 if not found:
@@ -675,7 +707,6 @@ def _mentions_jeffu(message: discord.Message) -> bool:
             return True
         for m in getattr(message, "mentions", []):
             try:
-                # display_name existe em Member; em User usamos name
                 name = ""
                 if hasattr(m, "display_name"):
                     name = (m.display_name or m.name or "").lower()
@@ -689,6 +720,282 @@ def _mentions_jeffu(message: discord.Message) -> bool:
         pass
     return False
 
+
+def normalize_text(text: str) -> str:
+    text = (text or "").lower().strip()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"<@!?\d+>|<#\d+>|<a?:\w+:\d+>", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def contains_term(text: str, term: str) -> bool:
+    text = normalize_text(text)
+    term = normalize_text(term)
+    if not term:
+        return False
+    return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text) is not None
+
+
+def find_matches(text: str, terms: list[str]) -> list[str]:
+    return [term for term in terms if contains_term(text, term)]
+
+
+def short_greeting_type(text: str):
+    text = normalize_text(text)
+    greetings = {
+        "bom dia": ["bom dia", "bom dia gente", "bom dia pessoal"],
+        "boa tarde": ["boa tarde", "boa tarde gente", "boa tarde pessoal"],
+        "boa noite": ["boa noite", "boa noite gente", "boa noite pessoal"],
+    }
+    for label, variants in greetings.items():
+        if text in variants:
+            return label
+    return None
+
+
+# ==================== CONTEXTO + COOLDOWN ====================
+CHANNEL_CONTEXT = defaultdict(lambda: deque(maxlen=12))
+USER_CHANNEL_CONTEXT = defaultdict(lambda: deque(maxlen=8))
+LAST_INTENT_REPLY_TS = {}
+LAST_USER_INTENT_REPLY_TS = {}
+
+
+def _channel_key(message: discord.Message):
+    guild_id = message.guild.id if message.guild else 0
+    return (guild_id, message.channel.id)
+
+
+def _user_channel_key(message: discord.Message):
+    guild_id = message.guild.id if message.guild else 0
+    return (guild_id, message.channel.id, message.author.id)
+
+
+def remember_context(message: discord.Message, intent: str, score: int, matched_groups: dict, reply: str):
+    record = {
+        "intent": intent,
+        "score": score,
+        "matched_groups": matched_groups,
+        "reply": reply,
+        "ts": time.time(),
+        "user_id": message.author.id,
+        "channel_id": message.channel.id,
+    }
+    CHANNEL_CONTEXT[_channel_key(message)].append(record)
+    USER_CHANNEL_CONTEXT[_user_channel_key(message)].append(record)
+
+
+def _recent_context(records, max_age: int = CONTEXT_MAX_AGE_SECONDS):
+    now = time.time()
+    return [r for r in records if now - r.get("ts", 0) <= max_age]
+
+
+def get_recent_intents(message: discord.Message):
+    return {
+        "channel": _recent_context(CHANNEL_CONTEXT[_channel_key(message)]),
+        "user_channel": _recent_context(USER_CHANNEL_CONTEXT[_user_channel_key(message)]),
+    }
+
+
+def cooldown_status(message: discord.Message, intent: str):
+    now = time.time()
+    channel_key = (_channel_key(message), intent)
+    user_key = (_user_channel_key(message), intent)
+    channel_wait = max(0, COOLDOWN_INTENT_SECONDS - int(now - LAST_INTENT_REPLY_TS.get(channel_key, 0)))
+    user_wait = max(0, COOLDOWN_USER_INTENT_SECONDS - int(now - LAST_USER_INTENT_REPLY_TS.get(user_key, 0)))
+    return {
+        "blocked": channel_wait > 0 or user_wait > 0,
+        "channel_wait": channel_wait,
+        "user_wait": user_wait,
+    }
+
+
+def mark_cooldown(message: discord.Message, intent: str):
+    now = time.time()
+    LAST_INTENT_REPLY_TS[(_channel_key(message), intent)] = now
+    LAST_USER_INTENT_REPLY_TS[(_user_channel_key(message), intent)] = now
+
+
+# ==================== MOTOR DE INTENÇÃO ====================
+INTENT_RULES = {
+    "site_status": {
+        "reply": "🌐 Veja em <#1409296003034644542>",
+        "threshold": 7,
+        "groups": [
+            {"name": "entidade", "terms": ["site", "sistema", "app", "aplicativo", "plataforma"], "weight": 3, "required": True, "cap": 1},
+            {"name": "problema", "terms": ["caiu", "fora do ar", "offline", "nao funciona", "nao abre", "saiu do ar", "instavel", "lento", "travando", "bugado", "carregando", "erro"], "weight": 4, "required": True, "cap": 2},
+        ],
+        "followup_terms": ["continua", "ainda", "voltou", "normalizou", "agora", "ruim", "instavel", "lento", "fora", "piorou", "melhorou"],
+        "negatives": ["site bonito", "site lindo", "gostei do site", "nome do site"],
+        "context_boost_user": 5,
+        "context_boost_channel": 3,
+    },
+    "support": {
+        "reply": "🔐 Para suporte, vá em <#1479642544429076500>",
+        "threshold": 7,
+        "groups": [
+            {"name": "assunto", "terms": ["login", "senha", "acesso", "conta", "ticket", "suporte", "entrar", "logar", "acessar"], "weight": 3, "required": True, "cap": 2},
+            {"name": "problema", "terms": ["nao consigo", "esqueci", "erro", "ajuda", "recuperar", "sem acesso", "problema", "abrir", "como", "falhou", "travou"], "weight": 3, "required": True, "cap": 2},
+        ],
+        "followup_terms": ["continua", "ainda", "deu ruim", "nao foi", "nao resolveu", "nao deu", "continua igual"],
+        "negatives": ["minha senha e forte", "gostei da senha", "troquei minha senha e pronto"],
+        "context_boost_user": 5,
+        "context_boost_channel": 2,
+    },
+    "obra_suggestion": {
+        "reply": "📚 Sugestões de obras é em <#1466087941506990171>",
+        "threshold": 6,
+        "groups": [
+            {"name": "midia", "terms": ["obra", "obras", "manga", "manhwa", "novel", "titulo", "titulos"], "weight": 2, "required": True, "cap": 2},
+            {"name": "intencao", "terms": ["sugestao", "sugestoes", "indicar", "indicacao", "recomendar", "recomendacao"], "weight": 4, "required": True, "cap": 2},
+        ],
+        "followup_terms": ["onde sugiro", "onde mando", "tem canal", "posso indicar"],
+        "negatives": ["obra boa", "essa obra e ruim", "terminei a obra"],
+        "context_boost_user": 4,
+        "context_boost_channel": 2,
+    },
+    "missing_chapters": {
+        "reply": "<#1452799882149761144>",
+        "threshold": 7,
+        "groups": [
+            {"name": "assunto", "terms": ["capitulo", "capitulos"], "weight": 3, "required": True, "cap": 2},
+            {"name": "problema", "terms": ["faltando", "faltam", "sumiu", "sumiram", "nao tem", "incompleto", "cade", "onde estao", "faltou", "nao veio"], "weight": 4, "required": True, "cap": 2},
+        ],
+        "followup_terms": ["continua", "ainda", "sumiu", "faltando", "sem", "nao veio", "segue faltando"],
+        "negatives": ["esse capitulo foi bom", "li o capitulo", "gostei do capitulo"],
+        "context_boost_user": 5,
+        "context_boost_channel": 3,
+    },
+}
+
+GREETING_REPLIES = {
+    "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+    "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+    "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
+}
+
+
+def score_intent(normalized_text: str, intent_name: str, rule: dict, context: dict):
+    score = 0
+    matched_groups = {}
+    missing_required = []
+
+    for negative in rule.get("negatives", []):
+        if contains_term(normalized_text, negative):
+            return {
+                "intent": intent_name,
+                "score": -999,
+                "matched_groups": {},
+                "missing_required": [],
+                "context_used": None,
+                "negative_hit": negative,
+            }
+
+    for group in rule.get("groups", []):
+        matches = find_matches(normalized_text, group.get("terms", []))
+        if matches:
+            capped_len = min(len(matches), int(group.get("cap", len(matches))))
+            group_score = capped_len * int(group.get("weight", 1))
+            score += group_score
+            matched_groups[group["name"]] = {
+                "matches": matches,
+                "score": group_score,
+            }
+        elif group.get("required"):
+            missing_required.append(group["name"])
+
+    context_used = None
+    user_recent = context.get("user_channel", [])
+    chan_recent = context.get("channel", [])
+
+    user_same_intent = any(item.get("intent") == intent_name for item in user_recent)
+    channel_same_intent = any(item.get("intent") == intent_name for item in chan_recent)
+    followup_matches = find_matches(normalized_text, rule.get("followup_terms", []))
+
+    if user_same_intent and followup_matches:
+        score += int(rule.get("context_boost_user", 0))
+        matched_groups["contexto_usuario_canal"] = {
+            "matches": followup_matches,
+            "score": int(rule.get("context_boost_user", 0)),
+        }
+        context_used = "user_channel"
+    elif channel_same_intent and followup_matches:
+        score += int(rule.get("context_boost_channel", 0))
+        matched_groups["contexto_canal"] = {
+            "matches": followup_matches,
+            "score": int(rule.get("context_boost_channel", 0)),
+        }
+        context_used = "channel"
+
+    if missing_required and context_used is None:
+        score -= 2 * len(missing_required)
+
+    return {
+        "intent": intent_name,
+        "score": score,
+        "matched_groups": matched_groups,
+        "missing_required": missing_required,
+        "context_used": context_used,
+        "negative_hit": None,
+    }
+
+
+def detect_auto_reply(message: discord.Message):
+    raw_text = message.content or ""
+    text = normalize_text(raw_text)
+    if not text:
+        return None
+
+    greeting = short_greeting_type(text)
+    if greeting:
+        return {
+            "intent": "greeting",
+            "reply": GREETING_REPLIES[greeting],
+            "score": 999,
+            "matched_groups": {"greeting": {"matches": [greeting], "score": 999}},
+            "context_used": None,
+            "threshold": 1,
+            "negative_hit": None,
+            "missing_required": [],
+        }
+
+    context = get_recent_intents(message)
+    candidates = []
+    for intent_name, rule in INTENT_RULES.items():
+        scored = score_intent(text, intent_name, rule, context)
+        scored["reply"] = rule["reply"]
+        scored["threshold"] = rule["threshold"]
+        candidates.append(scored)
+
+    candidates = [c for c in candidates if c["score"] > -999]
+    if not candidates:
+        return None
+
+    best = max(candidates, key=lambda x: x["score"])
+    if best["score"] < best["threshold"]:
+        return None
+    return best
+
+
+def explain_reason(result: dict) -> str:
+    parts = [f"intent={result['intent']}", f"score={result['score']}/{result.get('threshold', '?')}"]
+    if result.get("context_used"):
+        parts.append(f"contexto={result['context_used']}")
+    if result.get("missing_required"):
+        parts.append(f"faltando={','.join(result['missing_required'])}")
+    if result.get("negative_hit"):
+        parts.append(f"negativo={result['negative_hit']}")
+
+    groups_desc = []
+    for group_name, data in result.get("matched_groups", {}).items():
+        groups_desc.append(f"{group_name}: {', '.join(data.get('matches', []))} (+{data.get('score', 0)})")
+    if groups_desc:
+        parts.append("grupos=[" + " | ".join(groups_desc) + "]")
+    return " ; ".join(parts)
+
 # ==================== EVENTOS E MODERAÇÃO (ÚNICO on_message) ====================
 INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
 
@@ -696,6 +1003,7 @@ BAD_WORDS_PATTERN = re.compile(
     r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?",
     re.IGNORECASE
 )
+
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -740,11 +1048,10 @@ async def on_message(message: discord.Message):
             traceback.print_exc()
 
         texto = (message.content or "").strip()
-        lower = texto.lower()
 
         # BLOQUEIO DE INVITES (10m automático)
-        if INVITE_REGEX.search(message.content or ""):
-            if (message.author.guild_permissions.administrator or message.author.id == DONO_ID):
+        if INVITE_REGEX.search(texto):
+            if message.guild and (message.author.guild_permissions.administrator or message.author.id == DONO_ID):
                 await bot.process_commands(message)
                 return
             try:
@@ -765,45 +1072,29 @@ async def on_message(message: discord.Message):
                 traceback.print_exc()
             return
 
-        # ===== GREETINGS: responder a qualquer mensagem que contenha saudação =====
-        saudacoes = {
-            "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-            "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
-        }
-        for chave, resposta in saudacoes.items():
-            if chave in lower:
+        # RESPOSTAS AUTOMÁTICAS COM PONTUAÇÃO + CONTEXTO + COOLDOWN + LOGS
+        result = detect_auto_reply(message)
+        if result:
+            cd = cooldown_status(message, result["intent"])
+            if cd["blocked"]:
+                why_blocked = []
+                if cd["channel_wait"] > 0:
+                    why_blocked.append(f"cooldown_canal={cd['channel_wait']}s")
+                if cd["user_wait"] > 0:
+                    why_blocked.append(f"cooldown_usuario={cd['user_wait']}s")
+                if message.guild:
+                    await log(message.guild, f"⏳ Resposta automática bloqueada para {message.author.mention}: intent={result['intent']} ; {' ; '.join(why_blocked)} ; {explain_reason(result)}")
+            else:
+                remember_context(message, result["intent"], result["score"], result["matched_groups"], result["reply"])
+                mark_cooldown(message, result["intent"])
                 try:
-                    await message.reply(resposta, mention_author=False)
+                    await message.reply(result["reply"], mention_author=False)
                 except Exception as e:
-                    print("[GREET WARN] Falha ao enviar saudação:", e)
+                    print("[AUTO-REPLY WARN] Falha ao enviar resposta automática:", e)
                     traceback.print_exc()
+                if message.guild:
+                    await log(message.guild, f"🤖 Resposta automática enviada para {message.author.mention}: {explain_reason(result)}")
                 return
-
-        # REGRAS AUTOMÁTICAS (respostas rápidas)
-        palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
-        if any(p in lower for p in palavras_chave):
-            await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
-            return
-
-        frases_site = ["o site caiu", "site caiu", "site tá fora", "site ta fora", "site offline", "site não funciona", "site nao funciona", "site saiu do ar"]
-        if any(frase in lower for frase in frases_site):
-            await message.reply("🌐 Veja em <#1409296003034644542>", mention_author=False)
-            return
-
-        frases_obras = ["sugestão de obra", "sugestões de obra", "sugestão de obras", "sugestões de obras", "indicação de obra", "indicações de obras", "obras sugeridas", "obras recomendadas"]
-        if any(frase in lower for frase in frases_obras):
-            await message.reply("📚 Sugestões de obras é em <#1466087941506990171>", mention_author=False)
-            return
-
-        frases_capitulos = [
-            "faltando capítulos", "faltam capítulos", "capítulos faltando", "capitulo faltando", "capítulos sumiram",
-            "faltando capitulo", "não tem capítulos", "nao tem capitulos", "cadê os capítulos", "cade os capitulos",
-            "onde estão os capítulos", "onde estao os capitulos"
-        ]
-        if any(frase in lower for frase in frases_capitulos):
-            await message.reply("<#1452799882149761144>", mention_author=False)
-            return
 
         # Interações dirigidas ao bot (DM ou menção)
         is_dm = isinstance(message.channel, discord.DMChannel)
@@ -864,6 +1155,8 @@ async def on_ready():
                                     pass
                     try:
                         del _active_mutes[guild_key][member_id]
+                        if not _active_mutes[guild_key]:
+                            del _active_mutes[guild_key]
                     except Exception:
                         pass
                 else:
