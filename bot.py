@@ -9,6 +9,10 @@ import time
 import asyncio
 import unicodedata
 from collections import defaultdict, deque
+from io import BytesIO
+from datetime import datetime
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 try:
     from pymongo import MongoClient
@@ -44,7 +48,173 @@ COOLDOWN_USER_INTENT_SECONDS = 25  # mesmo intent pelo mesmo usuário no canal
 CONTEXT_MAX_AGE_SECONDS = 180      # contexto recente considerado válido
 
 # ==================== LOG ====================
-async def log(guild: discord.Guild, mensagem: str):
+LOG_IMAGE_BG = (18, 18, 24)
+LOG_IMAGE_PANEL = (28, 28, 38)
+LOG_IMAGE_TEXT = (235, 235, 245)
+LOG_IMAGE_MUTED = (150, 150, 170)
+LOG_IMAGE_ACCENT = (88, 166, 255)
+
+
+def _font_paths(bold: bool = False):
+    if bold:
+        return [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ]
+    return [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+
+
+def _get_font(size: int, bold: bool = False):
+    for path in _font_paths(bold):
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+
+def _text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
+    try:
+        return int(draw.textlength(text, font=font))
+    except Exception:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0]
+
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int):
+    text = (text or "").strip()
+    if not text:
+        return [""]
+
+    lines = []
+    for paragraph in text.splitlines() or [text]:
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if _text_width(draw, candidate, font) <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
+
+
+def _crop_circle(img: Image.Image, size: int = 112) -> Image.Image:
+    img = img.convert("RGB").resize((size, size))
+    mask = Image.new("L", (size, size), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.ellipse((0, 0, size - 1, size - 1), fill=255)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(img, (0, 0))
+    out.putalpha(mask)
+    return out
+
+
+async def _avatar_bytes(member) -> bytes | None:
+    if not member:
+        return None
+    try:
+        avatar = member.display_avatar.with_size(256)
+        return await avatar.read()
+    except Exception:
+        return None
+
+
+def _initials_from_member(member) -> str:
+    if not member:
+        return "?"
+    name = getattr(member, "display_name", None) or getattr(member, "name", None) or str(member)
+    parts = [p for p in str(name).split() if p]
+    if len(parts) >= 2:
+        return (parts[0][0] + parts[1][0]).upper()
+    return str(name)[:2].upper() if name else "?"
+
+
+async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=LOG_IMAGE_ACCENT) -> BytesIO:
+    width = 980
+    pad = 28
+    avatar_size = 112
+    header_h = 152
+
+    title_font = _get_font(30, bold=True)
+    meta_font = _get_font(17, bold=False)
+    member_font = _get_font(24, bold=True)
+    body_font = _get_font(21, bold=False)
+    small_font = _get_font(16, bold=False)
+
+    dummy = Image.new("RGB", (width, 200), LOG_IMAGE_BG)
+    draw = ImageDraw.Draw(dummy)
+
+    body_x = pad
+    body_w = width - pad * 2
+    if member:
+        body_x = pad + avatar_size + 24
+        body_w = width - body_x - pad
+
+    body_lines = _wrap_text(draw, mensagem or "(sem conteúdo)", body_font, body_w)
+    line_h = 31
+    body_h = max(160, 30 + len(body_lines) * line_h + 28)
+    height = header_h + body_h + pad
+
+    img = Image.new("RGB", (width, height), LOG_IMAGE_BG)
+    draw = ImageDraw.Draw(img)
+
+    # painel principal
+    draw.rounded_rectangle((16, 16, width - 16, height - 16), radius=24, fill=LOG_IMAGE_PANEL)
+    draw.rounded_rectangle((16, 16, 28, height - 16), radius=8, fill=accent)
+
+    # header
+    draw.text((pad, 28), title, font=title_font, fill=LOG_IMAGE_TEXT)
+    guild_name = guild.name if guild else "Servidor desconhecido"
+    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    draw.text((pad, 72), f"Servidor: {guild_name}", font=meta_font, fill=LOG_IMAGE_MUTED)
+    draw.text((pad, 98), f"Horário: {timestamp}", font=meta_font, fill=LOG_IMAGE_MUTED)
+
+    # avatar / infos do meliante
+    body_top = header_h
+    if member:
+        avatar_raw = await _avatar_bytes(member)
+        if avatar_raw:
+            avatar_img = _crop_circle(Image.open(BytesIO(avatar_raw)), avatar_size)
+        else:
+            avatar_img = Image.new("RGBA", (avatar_size, avatar_size), (60, 60, 78, 255))
+            av_draw = ImageDraw.Draw(avatar_img)
+            av_draw.ellipse((0, 0, avatar_size - 1, avatar_size - 1), fill=(60, 60, 78, 255))
+            av_draw.text((avatar_size // 2 - 16, avatar_size // 2 - 14), _initials_from_member(member), font=_get_font(34, bold=True), fill=(255, 255, 255))
+        img.paste(avatar_img, (pad, body_top), avatar_img)
+        name = getattr(member, 'display_name', None) or getattr(member, 'name', None) or str(member)
+        draw.text((body_x, body_top + 4), str(name), font=member_font, fill=LOG_IMAGE_TEXT)
+        draw.text((body_x, body_top + 40), f"ID: {getattr(member, 'id', 'desconhecido')}", font=meta_font, fill=LOG_IMAGE_MUTED)
+        mention = getattr(member, 'mention', None) or 'sem mention'
+        draw.text((body_x, body_top + 66), f"Menção: {mention}", font=small_font, fill=LOG_IMAGE_MUTED)
+    else:
+        draw.text((pad, body_top + 8), "Evento do sistema", font=member_font, fill=LOG_IMAGE_TEXT)
+
+    # caixa da mensagem
+    box_top = body_top + 118 if member else body_top + 52
+    draw.rounded_rectangle((pad, box_top, width - pad, height - pad), radius=18, fill=(34, 34, 46))
+    draw.text((pad + 18, box_top + 16), "Detalhes", font=_get_font(18, bold=True), fill=LOG_IMAGE_MUTED)
+    y = box_top + 48
+    for line in body_lines:
+        draw.text((pad + 18, y), line, font=body_font, fill=LOG_IMAGE_TEXT)
+        y += line_h
+
+    bio = BytesIO()
+    img.save(bio, format="PNG")
+    bio.seek(0)
+    return bio
+
+
+async def log(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=LOG_IMAGE_ACCENT):
     try:
         canal = None
         if guild and LOG_CHANNEL_ID:
@@ -52,7 +222,14 @@ async def log(guild: discord.Guild, mensagem: str):
         if not canal and guild:
             canal = discord.utils.get(guild.text_channels, name="mod-logs")
         if canal:
-            await canal.send(mensagem)
+            try:
+                image_bytes = await _build_log_image(guild, mensagem, member=member, title=title, accent=accent)
+                arquivo = discord.File(fp=image_bytes, filename="log.png")
+                await canal.send(file=arquivo)
+            except Exception as img_err:
+                print("[LOG WARN] Falha ao gerar/enviar log em imagem:", img_err)
+                traceback.print_exc()
+                await canal.send(mensagem)
         else:
             print("[LOG]", mensagem)
     except Exception:
@@ -244,7 +421,7 @@ async def mute_member(guild: discord.Guild, member: discord.Member):
             await member.add_roles(role, reason="Muted por envio de invite/propaganda")
             info = f"🔇 {member.mention} ({member.id}) foi mutado por envio de invite/propaganda."
             try:
-                await log(guild, info)
+                await log(guild, info, member=member, title="Membro mutado")
             except Exception:
                 print("[MUTE LOG WARN] Falha ao logar mute no canal de logs.")
             return True
@@ -476,7 +653,7 @@ async def _schedule_unmute(guild_id: int, member_id: int, delay_seconds: int):
             try:
                 await member.remove_roles(role, reason="Unmute automático (10 minutos expirados)")
                 try:
-                    await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado automaticamente (10m).")
+                    await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado automaticamente (10m).", member=member, title="Desmute automático")
                 except Exception:
                     pass
             except Exception as e:
@@ -522,7 +699,7 @@ async def mute_member_with_duration(guild: discord.Guild, member: discord.Member
             asyncio.create_task(_schedule_unmute(guild.id, member.id, int(seconds)))
 
         try:
-            await log(guild, f"🔇 {member.mention} ({member.id}) mutado automaticamente por 10 minutos (envio de invite).")
+            await log(guild, f"🔇 {member.mention} ({member.id}) mutado automaticamente por 10 minutos (envio de invite).", member=member, title="Mute automático")
         except Exception:
             pass
 
@@ -562,7 +739,7 @@ async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
             traceback.print_exc()
 
         try:
-            await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado.")
+            await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado.", member=member, title="Desmute manual")
         except Exception:
             pass
 
@@ -823,7 +1000,7 @@ def mark_cooldown(message: discord.Message, intent: str):
 INTENT_RULES = {
     "site_status": {
         "reply": "🌐 Veja em <#1409296003034644542>",
-        "threshold": 6,
+        "threshold": 7,
         "groups": [
             {"name": "entidade", "terms": ["site", "sistema", "app", "aplicativo", "plataforma"], "weight": 3, "required": True, "cap": 1},
             {"name": "problema", "terms": ["caiu", "fora do ar", "offline", "nao funciona", "nao abre", "saiu do ar", "instavel", "lento", "travando", "bugado", "carregando", "erro"], "weight": 4, "required": True, "cap": 2},
@@ -835,7 +1012,7 @@ INTENT_RULES = {
     },
     "support": {
         "reply": "🔐 Para suporte, vá em <#1479642544429076500>",
-        "threshold": 6,
+        "threshold": 7,
         "groups": [
             {"name": "assunto", "terms": ["login", "senha", "acesso", "conta", "ticket", "suporte", "entrar", "logar", "acessar"], "weight": 3, "required": True, "cap": 2},
             {"name": "problema", "terms": ["nao consigo", "esqueci", "erro", "ajuda", "recuperar", "sem acesso", "problema", "abrir", "como", "falhou", "travou"], "weight": 3, "required": True, "cap": 2},
@@ -859,7 +1036,7 @@ INTENT_RULES = {
     },
     "missing_chapters": {
         "reply": "<#1452799882149761144>",
-        "threshold": 6,
+        "threshold": 7,
         "groups": [
             {"name": "assunto", "terms": ["capitulo", "capitulos"], "weight": 3, "required": True, "cap": 2},
             {"name": "problema", "terms": ["faltando", "faltam", "sumiu", "sumiram", "nao tem", "incompleto", "cade", "onde estao", "faltou", "nao veio"], "weight": 4, "required": True, "cap": 2},
@@ -1050,7 +1227,7 @@ async def on_message(message: discord.Message):
         texto = (message.content or "").strip()
 
         # BLOQUEIO DE INVITES (10m automático)
-        if INVITE_REGEX.search(texto):
+        if message.guild and INVITE_REGEX.search(texto):
             if message.guild and (message.author.guild_permissions.administrator or message.author.id == DONO_ID):
                 await bot.process_commands(message)
                 return
@@ -1066,7 +1243,7 @@ async def on_message(message: discord.Message):
                         ok = await mute_member_with_duration(message.guild, membro, seconds=600)
                         if not ok:
                             print("[MOD WARN] Não foi possível aplicar mute automático.")
-                    await log(message.guild, f"⚠️ {message.author} enviou invite e foi mutado por 10m: {message.content}")
+                    await log(message.guild, f"⚠️ {message.author} enviou invite e foi mutado por 10m: {message.content}", member=message.author, title="Invite bloqueado")
             except Exception as e:
                 print("[BLOQUEIO WARN] Erro ao processar invite:", e)
                 traceback.print_exc()
@@ -1083,7 +1260,7 @@ async def on_message(message: discord.Message):
                 if cd["user_wait"] > 0:
                     why_blocked.append(f"cooldown_usuario={cd['user_wait']}s")
                 if message.guild:
-                    await log(message.guild, f"⏳ Resposta automática bloqueada para {message.author.mention}: intent={result['intent']} ; {' ; '.join(why_blocked)} ; {explain_reason(result)}")
+                    await log(message.guild, f"⏳ Resposta automática bloqueada para {message.author.mention}: intent={result['intent']} ; {' ; '.join(why_blocked)} ; {explain_reason(result)}", member=message.author, title="Auto-reply bloqueado")
             else:
                 remember_context(message, result["intent"], result["score"], result["matched_groups"], result["reply"])
                 mark_cooldown(message, result["intent"])
@@ -1093,7 +1270,7 @@ async def on_message(message: discord.Message):
                     print("[AUTO-REPLY WARN] Falha ao enviar resposta automática:", e)
                     traceback.print_exc()
                 if message.guild:
-                    await log(message.guild, f"🤖 Resposta automática enviada para {message.author.mention}: {explain_reason(result)}")
+                    await log(message.guild, f"🤖 Resposta automática enviada para {message.author.mention}: {explain_reason(result)}", member=message.author, title="Auto-reply enviado")
                 return
 
         # Interações dirigidas ao bot (DM ou menção)
@@ -1150,7 +1327,7 @@ async def on_ready():
                             if role and role in member.roles:
                                 try:
                                     await member.remove_roles(role, reason="Unmute pós-restart (tempo expirado)")
-                                    await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado (tempo expirado durante reinício).")
+                                    await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado (tempo expirado durante reinício).", member=member, title="Desmute pós-restart")
                                 except Exception:
                                     pass
                     try:
