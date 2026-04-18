@@ -274,7 +274,7 @@ def _summarize_log_message(title: str, mensagem: str) -> tuple[str, str, str]:
 
 
 async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=None) -> BytesIO:
-    width, height = 1024, 620
+    width, height = 1024, 700
     accent = _accent_for_title(title, accent)
 
     badge_font = _get_font(16, bold=True)
@@ -286,13 +286,36 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
 
     card_title, line1, line2 = _summarize_log_message(title, mensagem)
 
+    card_w = 720
+    card_x = (width - card_w) // 2
+    card_y = 108
+    avatar_size = 146
+    avatar_y = card_y + 22
+    pill_top = avatar_y + avatar_size + 14
+    sub_top = pill_top + 56
+
+    dummy = Image.new('RGB', (width, height), LOG_IMAGE_BG)
+    dummy_draw = ImageDraw.Draw(dummy)
+    details_x1 = card_x + 34
+    details_x2 = card_x + card_w - 34
+    body_max_w = details_x2 - details_x1 - 36
+    summary_lines = []
+    for line in [line1, line2]:
+        if line:
+            wrapped = _wrap_text(dummy_draw, line, body_font, body_max_w)
+            summary_lines.extend(wrapped[:2])
+    if not summary_lines:
+        summary_lines = ['(sem detalhes)']
+
+    line_h = 28
+    details_y1 = sub_top + 52
+    content_h = 58 + (len(summary_lines) * line_h) + 20
+    details_y2 = details_y1 + content_h
+    card_h = max(360, (details_y2 - card_y) + 28)
+
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
     canvas = canvas.convert('RGBA')
-
-    card_w, card_h = 720, 300
-    card_x = (width - card_w) // 2
-    card_y = 108
 
     canvas = _paste_glow(canvas, (card_x - 8, card_y - 8, card_x + card_w + 8, card_y + card_h + 8), accent, blur=30, alpha=82, radius=42)
     shadow = Image.new('RGBA', (width, height), (0, 0, 0, 0))
@@ -306,7 +329,6 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     draw.rounded_rectangle((card_x + 8, card_y + 8, card_x + card_w - 8, card_y + card_h - 8), radius=34, outline=LOG_IMAGE_LINE, width=1)
     _draw_blob(draw, card_x + card_w - 126, card_y - 14, fill=accent, outline=LOG_IMAGE_CARD_BORDER)
 
-    # badge servidor
     badge_text = (guild.name if guild else 'Discord')[:18]
     badge_w = max(150, min(220, int(len(badge_text) * 11) + 76))
     badge_h = 56
@@ -323,16 +345,12 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     draw.text((badge_x + 54, badge_y + 10), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
     draw.text((badge_x + 54, badge_y + 27), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
 
-    # chevron
     cx = card_x + card_w - 58
     cy = card_y + 34
     draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
     draw.line((cx + 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
 
-    # avatar
-    avatar_size = 146
     avatar_cx = card_x + card_w // 2
-    avatar_y = card_y + 22
     avatar_ring_box = (avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10)
     canvas = _paste_glow(canvas, avatar_ring_box, accent, blur=18, alpha=70, radius=999)
     draw = ImageDraw.Draw(canvas)
@@ -351,29 +369,18 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(14, 12, 32), width=4)
     draw.ellipse((avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10), outline=accent, width=2)
 
-    # título / subtítulo
-    pill_top = avatar_y + avatar_size + 14
     _draw_centered_pill(draw, avatar_cx, pill_top, card_title, hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=34, v_padding=10, radius=24, max_width=card_w - 160)
     subtitle = f"Usuário: {getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema'}" if member else 'Evento interno do bot'
-    sub_top = pill_top + 56
     _draw_centered_pill(draw, avatar_cx, sub_top, subtitle[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=24, v_padding=8, radius=18, max_width=card_w - 180)
 
-    # caixa de detalhes compacta
-    details_x1 = card_x + 34
-    details_x2 = card_x + card_w - 34
-    details_y1 = sub_top + 58
-    details_y2 = card_y + card_h - 26
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
     draw.text((details_x1 + 18, details_y1 + 14), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
     draw.line((details_x1 + 18, details_y1 + 42, details_x2 - 18, details_y1 + 42), fill=LOG_IMAGE_LINE, width=1)
 
     y = details_y1 + 58
-    for line in [line1, line2]:
-        if line:
-            wrapped = _wrap_text(draw, line, body_font, details_x2 - details_x1 - 36)
-            for seg in wrapped[:2]:
-                draw.text((details_x1 + 18, y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
-                y += 28
+    for seg in summary_lines[:4]:
+        draw.text((details_x1 + 18, y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
+        y += line_h
 
     bio = BytesIO()
     canvas.convert('RGB').save(bio, format='PNG')
