@@ -232,8 +232,8 @@ def _paste_glow(canvas: Image.Image, box, color, blur=24, alpha=115, radius=28):
     return Image.alpha_composite(canvas, glow)
 
 
-async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', accent=None) -> BytesIO:
-    width, height = 1024, 700
+async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', message_text: str = '', accent=None) -> BytesIO:
+    width, height = 1024, 740
     accent = _accent_for_title(title, accent)
 
     badge_font = _get_font(16, bold=True)
@@ -249,11 +249,12 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
         ('Chat', channel_name or 'sistema'),
         ('Motivo', reason or 'não informado'),
         ('Ação', action or 'não informada'),
+        ('Mensagem', message_text or 'sem mensagem'),
     ]
 
-    card_w = 740
+    card_w = 760
     card_x = (width - card_w) // 2
-    card_y = 108
+    card_y = 96
     avatar_size = 146
     avatar_y = card_y + 22
     pill_top = avatar_y + avatar_size + 14
@@ -269,13 +270,14 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
         wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w)
         if not wrapped:
             wrapped = ['']
-        rendered.append((label, wrapped[:2]))
+        max_lines = 3 if label == 'Mensagem' else 2
+        rendered.append((label, wrapped[:max_lines]))
     line_h = 28
     detail_rows = sum(len(v) for _, v in rendered)
     details_y1 = sub_top + 52
     content_h = 64 + detail_rows * line_h + 24
     details_y2 = details_y1 + content_h
-    card_h = max(370, (details_y2 - card_y) + 28)
+    card_h = max(420, (details_y2 - card_y) + 28)
 
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
@@ -359,7 +361,7 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
     return bio
 
 
-async def log(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', accent=LOG_IMAGE_ACCENT):
+async def log(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', message_text: str = '', accent=LOG_IMAGE_ACCENT):
     try:
         canal = None
         if guild and LOG_CHANNEL_ID:
@@ -368,16 +370,16 @@ async def log(guild: discord.Guild, member=None, title: str = 'Log', channel_nam
             canal = discord.utils.get(guild.text_channels, name='mod-logs')
         if canal:
             try:
-                image_bytes = await _build_log_image(guild, member=member, title=title, channel_name=channel_name, reason=reason, action=action, accent=accent)
+                image_bytes = await _build_log_image(guild, member=member, title=title, channel_name=channel_name, reason=reason, action=action, message_text=message_text, accent=accent)
                 arquivo = discord.File(fp=image_bytes, filename='log.png')
                 await canal.send(file=arquivo)
             except Exception as img_err:
                 print('[LOG WARN] Falha ao gerar/enviar log em imagem:', img_err)
                 traceback.print_exc()
-                resumo = f"{title} | Nome: {(getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'} | Chat: {channel_name or 'sistema'} | Motivo: {reason} | Ação: {action}"
+                resumo = f"{title} | Nome: {(getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'} | Chat: {channel_name or 'sistema'} | Motivo: {reason} | Ação: {action} | Mensagem: {message_text}"
                 await canal.send(resumo)
         else:
-            print('[LOG]', title, channel_name, reason, action)
+            print('[LOG]', title, channel_name, reason, action, message_text)
     except Exception:
         print('[LOG ERROR] Falha ao enviar log:')
         traceback.print_exc()
@@ -567,7 +569,7 @@ async def mute_member(guild: discord.Guild, member: discord.Member):
             await member.add_roles(role, reason="Muted por envio de invite/propaganda")
             info = f"🔇 {member.mention} ({member.id}) foi mutado por envio de invite/propaganda."
             try:
-                await log(guild, member=member, title="Usuário mutado", channel_name="sistema", reason="Envio de invite/propaganda", action="Cargo Muted aplicado")
+                await log(guild, member=member, title="Usuário mutado", channel_name="sistema", reason="Envio de invite/propaganda", action="Cargo Muted aplicado", message_text="sem mensagem disponível")
             except Exception:
                 print("[MUTE LOG WARN] Falha ao logar mute no canal de logs.")
             return True
@@ -799,7 +801,7 @@ async def _schedule_unmute(guild_id: int, member_id: int, delay_seconds: int):
             try:
                 await member.remove_roles(role, reason="Unmute automático (10 minutos expirados)")
                 try:
-                    await log(guild, member=member, title="Desmute automático", channel_name="sistema", reason="Tempo de 10 minutos expirou", action="Cargo Muted removido")
+                    await log(guild, member=member, title="Desmute automático", channel_name="sistema", reason="Tempo de 10 minutos expirou", action="Cargo Muted removido", message_text="sem mensagem disponível")
                 except Exception:
                     pass
             except Exception as e:
@@ -845,7 +847,7 @@ async def mute_member_with_duration(guild: discord.Guild, member: discord.Member
             asyncio.create_task(_schedule_unmute(guild.id, member.id, int(seconds)))
 
         try:
-            await log(guild, member=member, title="Mute automático", channel_name="sistema", reason="Envio de invite detectado", action="Mute de 10 minutos aplicado")
+            await log(guild, member=member, title="Mute automático", channel_name="sistema", reason="Envio de invite detectado", action="Mute de 10 minutos aplicado", message_text="sem mensagem disponível")
         except Exception:
             pass
 
@@ -885,7 +887,7 @@ async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
             traceback.print_exc()
 
         try:
-            await log(guild, member=member, title="Desmute manual", channel_name="sistema", reason="Comando de moderação", action="Cargo Muted removido")
+            await log(guild, member=member, title="Desmute manual", channel_name="sistema", reason="Comando de moderação", action="Cargo Muted removido", message_text="sem mensagem disponível")
         except Exception:
             pass
 
@@ -1389,7 +1391,7 @@ async def on_message(message: discord.Message):
                         ok = await mute_member_with_duration(message.guild, membro, seconds=600)
                         if not ok:
                             print("[MOD WARN] Não foi possível aplicar mute automático.")
-                    await log(message.guild, member=message.author, title="Invite bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason="Invite detectado na mensagem", action="Mensagem removida e mute de 10 minutos aplicado")
+                    await log(message.guild, member=message.author, title="Invite bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason="Invite detectado na mensagem", action="Mensagem removida e mute de 10 minutos aplicado", message_text=(message.content or "sem mensagem"))
             except Exception as e:
                 print("[BLOQUEIO WARN] Erro ao processar invite:", e)
                 traceback.print_exc()
@@ -1406,7 +1408,7 @@ async def on_message(message: discord.Message):
                 if cd["user_wait"] > 0:
                     why_blocked.append(f"cooldown_usuario={cd['user_wait']}s")
                 if message.guild:
-                    await log(message.guild, member=message.author, title="Auto-reply bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Cooldown ativo: {' ; '.join(why_blocked)}", action=f"Resposta da intent {result['intent']} não foi enviada")
+                    await log(message.guild, member=message.author, title="Auto-reply bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Cooldown ativo: {' ; '.join(why_blocked)}", action=f"Resposta da intent {result['intent']} não foi enviada", message_text=(message.content or "sem mensagem"))
             else:
                 remember_context(message, result["intent"], result["score"], result["matched_groups"], result["reply"])
                 mark_cooldown(message, result["intent"])
@@ -1416,7 +1418,7 @@ async def on_message(message: discord.Message):
                     print("[AUTO-REPLY WARN] Falha ao enviar resposta automática:", e)
                     traceback.print_exc()
                 if message.guild:
-                    await log(message.guild, member=message.author, title="Auto-reply enviado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Intent detectada: {result['intent']}", action="Resposta automática enviada com sucesso")
+                    await log(message.guild, member=message.author, title="Auto-reply enviado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Intent detectada: {result['intent']}", action="Resposta automática enviada com sucesso", message_text=(message.content or "sem mensagem"))
                 return
 
         # Interações dirigidas ao bot (DM ou menção)
@@ -1473,7 +1475,7 @@ async def on_ready():
                             if role and role in member.roles:
                                 try:
                                     await member.remove_roles(role, reason="Unmute pós-restart (tempo expirado)")
-                                    await log(guild, member=member, title="Desmute pós-restart", channel_name="sistema", reason="Tempo expirado durante reinício", action="Cargo Muted removido")
+                                    await log(guild, member=member, title="Desmute pós-restart", channel_name="sistema", reason="Tempo expirado durante reinício", action="Cargo Muted removido", message_text="sem mensagem disponível")
                                 except Exception:
                                     pass
                     try:
