@@ -27,7 +27,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="/", intents=intents)
 
 DONO_ID = 766709835701682208
 
@@ -233,15 +233,15 @@ def _paste_glow(canvas: Image.Image, box, color, blur=24, alpha=115, radius=28):
 
 
 async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', message_text: str = '', accent=None) -> BytesIO:
-    width, height = 1024, 740
+    width, height = 1400, 1200
     accent = _accent_for_title(title, accent)
 
-    badge_font = _get_font(16, bold=True)
-    hero_font = _get_font(34, bold=True)
-    sub_font = _get_font(20, bold=False)
-    body_font = _get_font(20, bold=False)
-    label_font = _get_font(17, bold=True)
-    small_font = _get_font(14, bold=False)
+    badge_font = _get_font(32, bold=True)
+    hero_font = _get_font(68, bold=True)
+    sub_font = _get_font(40, bold=False)
+    body_font = _get_font(40, bold=False)
+    label_font = _get_font(34, bold=True)
+    small_font = _get_font(28, bold=False)
 
     name_text = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
     lines = [
@@ -252,10 +252,10 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
         ('Mensagem', message_text or 'sem mensagem'),
     ]
 
-    card_w = 760
+    card_w = 1100
     card_x = (width - card_w) // 2
     card_y = 96
-    avatar_size = 146
+    avatar_size = 180
     avatar_y = card_y + 22
     pill_top = avatar_y + avatar_size + 14
     sub_top = pill_top + 56
@@ -264,7 +264,7 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
     dummy_draw = ImageDraw.Draw(dummy)
     details_x1 = card_x + 34
     details_x2 = card_x + card_w - 34
-    body_max_w = details_x2 - details_x1 - 170
+    body_max_w = details_x2 - details_x1 - 290
     rendered = []
     for label, value in lines:
         wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w)
@@ -272,12 +272,12 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
             wrapped = ['']
         max_lines = 3 if label == 'Mensagem' else 2
         rendered.append((label, wrapped[:max_lines]))
-    line_h = 28
+    line_h = 56
     detail_rows = sum(len(v) for _, v in rendered)
-    details_y1 = sub_top + 52
-    content_h = 64 + detail_rows * line_h + 24
+    details_y1 = sub_top + 90
+    content_h = 110 + detail_rows * line_h + 40
     details_y2 = details_y1 + content_h
-    card_h = max(420, (details_y2 - card_y) + 28)
+    card_h = max(760, (details_y2 - card_y) + 60)
 
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
@@ -296,25 +296,25 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
     _draw_blob(draw, card_x + card_w - 126, card_y - 14, fill=accent, outline=LOG_IMAGE_CARD_BORDER)
 
     badge_text = (guild.name if guild else 'Discord')[:18]
-    badge_w = max(150, min(220, int(len(badge_text) * 11) + 76))
-    badge_h = 56
+    badge_w = max(260, min(420, int(len(badge_text) * 20) + 120))
+    badge_h = 88
     badge_x = card_x + 22
     badge_y = card_y + 18
     draw.rounded_rectangle((badge_x, badge_y, badge_x + badge_w, badge_y + badge_h), radius=18, fill=LOG_IMAGE_PILL)
     icon_raw = await _guild_icon_bytes(guild)
-    icon_size = 34
+    icon_size = 50
     if icon_raw:
         icon_img = _crop_circle(Image.open(BytesIO(icon_raw)), icon_size)
         canvas.paste(icon_img, (badge_x + 12, badge_y + 11), icon_img)
     else:
         draw.ellipse((badge_x + 12, badge_y + 11, badge_x + 46, badge_y + 45), fill=(88, 81, 148))
-    draw.text((badge_x + 54, badge_y + 10), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
-    draw.text((badge_x + 54, badge_y + 27), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
+    draw.text((badge_x + 76, badge_y + 14), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((badge_x + 76, badge_y + 44), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
 
-    cx = card_x + card_w - 58
-    cy = card_y + 34
-    draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
-    draw.line((cx + 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
+    cx = card_x + card_w - 82
+    cy = card_y + 50
+    draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=9)
+    draw.line((cx + 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=9)
 
     avatar_cx = card_x + card_w // 2
     avatar_ring_box = (avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10)
@@ -335,25 +335,25 @@ async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log'
     draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(14, 12, 32), width=4)
     draw.ellipse((avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10), outline=accent, width=2)
 
-    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Evento registrado', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=34, v_padding=10, radius=24, max_width=card_w - 160)
-    _draw_centered_pill(draw, avatar_cx, sub_top, name_text[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=24, v_padding=8, radius=18, max_width=card_w - 180)
+    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Evento registrado', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=52, v_padding=18, radius=30, max_width=card_w - 220)
+    _draw_centered_pill(draw, avatar_cx, sub_top, name_text[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=40, v_padding=14, radius=24, max_width=card_w - 260)
 
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
-    draw.text((details_x1 + 18, details_y1 + 14), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
-    draw.line((details_x1 + 18, details_y1 + 42, details_x2 - 18, details_y1 + 42), fill=LOG_IMAGE_LINE, width=1)
+    draw.text((details_x1 + 28, details_y1 + 22), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
+    draw.line((details_x1 + 28, details_y1 + 74, details_x2 - 28, details_y1 + 74), fill=LOG_IMAGE_LINE, width=2)
 
-    label_w = 112
-    y = details_y1 + 58
+    label_w = 220
+    y = details_y1 + 100
     for label, parts in rendered:
-        draw.text((details_x1 + 18, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
+        draw.text((details_x1 + 28, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
         inner_y = y
         for seg in parts:
-            draw.text((details_x1 + 18 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
+            draw.text((details_x1 + 28 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
             inner_y += line_h
         y = inner_y + 4
 
     stamp = datetime.now().strftime('%d/%m/%Y %H:%M')
-    draw.text((card_x + card_w - 158, card_y + card_h - 18), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((card_x + card_w - 260, card_y + card_h - 34), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
 
     bio = BytesIO()
     canvas.convert('RGB').save(bio, format='PNG')
