@@ -12,7 +12,7 @@ from collections import defaultdict, deque
 from io import BytesIO
 from datetime import datetime
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageChops
 
 try:
     from pymongo import MongoClient
@@ -48,14 +48,16 @@ COOLDOWN_USER_INTENT_SECONDS = 25  # mesmo intent pelo mesmo usuário no canal
 CONTEXT_MAX_AGE_SECONDS = 180      # contexto recente considerado válido
 
 # ==================== LOG ====================
-LOG_IMAGE_BG = (7, 21, 48)
-LOG_IMAGE_CARD = (78, 70, 138)
-LOG_IMAGE_CARD_BORDER = (52, 44, 102)
-LOG_IMAGE_TEXT = (241, 243, 255)
-LOG_IMAGE_MUTED = (198, 202, 227)
-LOG_IMAGE_ACCENT = (110, 96, 204)
-LOG_IMAGE_PILL = (69, 61, 125)
-LOG_IMAGE_SHADOW = (0, 0, 0, 90)
+LOG_IMAGE_BG = (6, 20, 46)
+LOG_IMAGE_BG_TOP = (10, 30, 66)
+LOG_IMAGE_CARD = (86, 75, 150)
+LOG_IMAGE_CARD_2 = (70, 62, 132)
+LOG_IMAGE_CARD_BORDER = (58, 50, 112)
+LOG_IMAGE_TEXT = (242, 245, 255)
+LOG_IMAGE_MUTED = (201, 206, 233)
+LOG_IMAGE_ACCENT = (114, 98, 219)
+LOG_IMAGE_PILL = (67, 59, 126)
+LOG_IMAGE_SHADOW = (0, 0, 0, 110)
 
 
 def _font_paths(bold: bool = False):
@@ -139,6 +141,16 @@ async def _avatar_bytes(member) -> bytes | None:
         return None
 
 
+async def _guild_icon_bytes(guild) -> bytes | None:
+    if not guild or not getattr(guild, 'icon', None):
+        return None
+    try:
+        icon = guild.icon.with_size(128)
+        return await icon.read()
+    except Exception:
+        return None
+
+
 def _initials_from_member(member) -> str:
     if not member:
         return "?"
@@ -169,78 +181,123 @@ def _accent_for_title(title: str, accent=None):
     if accent:
         return accent
     if 'invite' in title or 'mute' in title or 'bloque' in title:
-        return (133, 100, 227)
+        return (146, 103, 255)
     if 'desmute' in title:
-        return (82, 183, 136)
+        return (88, 200, 144)
     if 'auto-reply' in title:
-        return (96, 148, 235)
+        return (91, 153, 255)
     return LOG_IMAGE_ACCENT
 
 
-def _draw_background(canvas: Image.Image):
-    draw = ImageDraw.Draw(canvas)
+def _draw_vertical_gradient(canvas: Image.Image, top_color, bottom_color):
     w, h = canvas.size
-    draw.rectangle((0, 0, w, h), fill=LOG_IMAGE_BG)
-    draw.ellipse((-180, -120, 420, 300), fill=(10, 28, 59))
-    draw.ellipse((w - 420, -140, w + 120, 260), fill=(9, 28, 63))
-    draw.ellipse((w - 260, h - 220, w + 100, h + 40), fill=(12, 41, 84))
-    draw.rectangle((0, h - 92, w, h), fill=(27, 106, 170))
-    draw.ellipse((68, h - 132, 152, h - 54), fill=(116, 182, 226))
-    draw.ellipse((86, h - 120, 132, h - 76), fill=(140, 205, 240))
-    draw.line((94, h - 150, 88, h - 166), fill=(91, 176, 227), width=3)
-    draw.line((108, h - 146, 112, h - 164), fill=(91, 176, 227), width=3)
+    base = Image.new('RGB', (w, h), top_color)
+    top_r, top_g, top_b = top_color
+    bot_r, bot_g, bot_b = bottom_color
+    px = base.load()
+    for y in range(h):
+        t = y / max(1, h - 1)
+        r = int(top_r + (bot_r - top_r) * t)
+        g = int(top_g + (bot_g - top_g) * t)
+        b = int(top_b + (bot_b - top_b) * t)
+        for x in range(w):
+            px[x, y] = (r, g, b)
+    return base
+
+
+def _draw_background(canvas: Image.Image):
+    w, h = canvas.size
+    bg = _draw_vertical_gradient(canvas, LOG_IMAGE_BG_TOP, LOG_IMAGE_BG)
+    canvas.paste(bg, (0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.ellipse((-220, -160, 460, 320), fill=(9, 28, 59))
+    draw.ellipse((w - 450, -170, w + 120, 280), fill=(8, 27, 63))
+    draw.polygon([(0, h - 95), (80, h - 102), (160, h - 94), (240, h - 100), (320, h - 93), (400, h - 99), (480, h - 92), (560, h - 98), (640, h - 93), (720, h - 97), (800, h - 91), (880, h - 96), (w, h - 92), (w, h), (0, h)], fill=(28, 112, 176))
+    draw.rectangle((0, h - 18, w, h), fill=(59, 31, 182))
+    draw.ellipse((70, h - 124, 156, h - 58), fill=(111, 186, 228))
+    draw.ellipse((92, h - 116, 134, h - 82), fill=(148, 218, 245))
+    draw.line((95, h - 148, 88, h - 166), fill=(97, 181, 232), width=3)
+    draw.line((112, h - 145, 116, h - 163), fill=(97, 181, 232), width=3)
 
 
 def _draw_blob(draw, x, y, fill, outline=None):
-    draw.ellipse((x, y + 8, x + 94, y + 62), fill=fill, outline=outline, width=3 if outline else 0)
-    draw.ellipse((x + 52, y - 4, x + 112, y + 50), fill=fill, outline=outline, width=3 if outline else 0)
-    draw.ellipse((x + 12, y - 8, x + 58, y + 30), fill=fill, outline=outline, width=3 if outline else 0)
+    draw.ellipse((x, y + 10, x + 92, y + 60), fill=fill, outline=outline, width=3 if outline else 0)
+    draw.ellipse((x + 48, y - 2, x + 110, y + 50), fill=fill, outline=outline, width=3 if outline else 0)
+    draw.ellipse((x + 12, y - 10, x + 58, y + 28), fill=fill, outline=outline, width=3 if outline else 0)
+
+
+def _paste_glow(canvas: Image.Image, box, color, blur=24, alpha=125, radius=28):
+    glow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    rgba = (*color, alpha)
+    gd.rounded_rectangle(box, radius=radius, fill=rgba)
+    glow = glow.filter(ImageFilter.GaussianBlur(blur))
+    return Image.alpha_composite(canvas, glow)
 
 
 async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=None) -> BytesIO:
-    width, height = 960, 540
+    width, height = 1024, 576
     accent = _accent_for_title(title, accent)
 
-    label_font = _get_font(16, bold=True)
-    meta_font = _get_font(14, bold=False)
-    hero_font = _get_font(26, bold=True)
-    sub_font = _get_font(18, bold=False)
+    badge_font = _get_font(16, bold=True)
+    label_font = _get_font(18, bold=True)
+    hero_font = _get_font(28, bold=True)
+    sub_font = _get_font(19, bold=False)
     body_font = _get_font(20, bold=False)
-    small_font = _get_font(15, bold=False)
+    small_font = _get_font(14, bold=False)
 
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
+    canvas = canvas.convert('RGBA')
 
+    card_w, card_h = 676, 306
+    card_x = (width - card_w) // 2
+    card_y = 120
+
+    canvas = _paste_glow(canvas, (card_x - 8, card_y - 8, card_x + card_w + 8, card_y + card_h + 8), accent, blur=32, alpha=90, radius=42)
     shadow = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     sh_draw = ImageDraw.Draw(shadow)
-    card_w, card_h = 630, 282
-    card_x = (width - card_w) // 2
-    card_y = 118
-    sh_draw.rounded_rectangle((card_x + 8, card_y + 12, card_x + card_w + 8, card_y + card_h + 12), radius=38, fill=LOG_IMAGE_SHADOW)
-    shadow = shadow.filter(ImageFilter.GaussianBlur(12))
-    canvas = Image.alpha_composite(canvas.convert('RGBA'), shadow)
+    sh_draw.rounded_rectangle((card_x + 10, card_y + 16, card_x + card_w + 10, card_y + card_h + 16), radius=40, fill=LOG_IMAGE_SHADOW)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+    canvas = Image.alpha_composite(canvas, shadow)
+
     draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((card_x, card_y, card_x + card_w, card_y + card_h), radius=38, fill=LOG_IMAGE_CARD, outline=LOG_IMAGE_CARD_BORDER, width=6)
+    draw.rounded_rectangle((card_x + 8, card_y + 8, card_x + card_w - 8, card_y + card_h - 8), radius=34, outline=(109, 99, 185), width=2)
+    _draw_blob(draw, card_x + card_w - 122, card_y - 20, fill=accent, outline=LOG_IMAGE_CARD_BORDER)
 
-    draw.rounded_rectangle((card_x, card_y, card_x + card_w, card_y + card_h), radius=36, fill=LOG_IMAGE_CARD, outline=LOG_IMAGE_CARD_BORDER, width=6)
-    _draw_blob(draw, card_x + card_w - 116, card_y - 16, fill=accent, outline=LOG_IMAGE_CARD_BORDER)
-
+    # badge do servidor
     badge_text = (guild.name if guild else 'Discord')[:18]
-    badge_w = max(120, min(190, int(len(badge_text) * 10) + 60))
-    badge_h = 52
+    badge_w = max(142, min(220, int(len(badge_text) * 11) + 76))
+    badge_h = 58
     badge_x = card_x + 22
     badge_y = card_y + 18
-    draw.rounded_rectangle((badge_x, badge_y, badge_x + badge_w, badge_y + badge_h), radius=16, fill=LOG_IMAGE_PILL)
-    draw.text((badge_x + 14, badge_y + 8), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
-    draw.text((badge_x + 14, badge_y + 24), badge_text, font=label_font, fill=LOG_IMAGE_TEXT)
+    draw.rounded_rectangle((badge_x, badge_y, badge_x + badge_w, badge_y + badge_h), radius=18, fill=LOG_IMAGE_PILL)
+    icon_raw = await _guild_icon_bytes(guild)
+    icon_size = 34
+    if icon_raw:
+        icon_img = _crop_circle(Image.open(BytesIO(icon_raw)), icon_size)
+        canvas.paste(icon_img, (badge_x + 12, badge_y + 12), icon_img)
+    else:
+        draw.ellipse((badge_x + 12, badge_y + 12, badge_x + 12 + icon_size, badge_y + 12 + icon_size), fill=(88, 81, 148))
+    draw.text((badge_x + 54, badge_y + 10), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((badge_x + 54, badge_y + 27), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
 
-    cx = card_x + card_w - 56
-    cy = card_y + 34
+    # chevron e detalhe superior direito
+    cx = card_x + card_w - 60
+    cy = card_y + 36
     draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
     draw.line((cx + 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
+    draw.arc((card_x + card_w - 102, card_y - 20, card_x + card_w - 82, card_y), 200, 330, fill=accent, width=3)
+    draw.arc((card_x + card_w - 82, card_y - 26, card_x + card_w - 58, card_y - 2), 200, 330, fill=accent, width=3)
 
-    avatar_size = 138
+    # avatar central com anéis
+    avatar_size = 144
     avatar_cx = card_x + card_w // 2
     avatar_y = card_y + 24
+    avatar_ring_box = (avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10)
+    canvas = _paste_glow(canvas, avatar_ring_box, accent, blur=18, alpha=70, radius=999)
+    draw = ImageDraw.Draw(canvas)
     avatar_raw = await _avatar_bytes(member)
     if avatar_raw:
         avatar_img = _crop_circle(Image.open(BytesIO(avatar_raw)), avatar_size)
@@ -249,29 +306,35 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
         av_draw = ImageDraw.Draw(avatar_img)
         av_draw.ellipse((0, 0, avatar_size - 1, avatar_size - 1), fill=(40, 36, 83), outline=(16, 14, 35), width=4)
         initials = _initials_from_member(member)
-        f = _get_font(42, bold=True)
+        f = _get_font(44, bold=True)
         tw, th = _text_size(av_draw, initials, f)
         av_draw.text(((avatar_size - tw) / 2, (avatar_size - th) / 2 - 2), initials, font=f, fill=(255, 255, 255))
     canvas.paste(avatar_img, (avatar_cx - avatar_size // 2, avatar_y), avatar_img)
-    draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(16, 14, 35), width=4)
+    draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(14, 12, 32), width=4)
+    draw.ellipse((avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10), outline=accent, width=2)
 
-    pill_top = avatar_y + avatar_size + 18
-    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Log', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, max_width=card_w - 120)
+    pill_top = avatar_y + avatar_size + 16
+    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Log', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, max_width=card_w - 138)
 
-    subtitle = f"Usuário #{getattr(member, 'id', '---')}" if member else "Evento interno do bot"
-    sub_top = pill_top + 50
-    _draw_centered_pill(draw, avatar_cx, sub_top, subtitle, sub_font, (89, 82, 151), LOG_IMAGE_MUTED, h_padding=20, v_padding=8, radius=18, max_width=card_w - 160)
+    subtitle = f"Você é o membro #{getattr(member, 'id', '---')}" if member else "Evento interno do bot"
+    sub_top = pill_top + 52
+    _draw_centered_pill(draw, avatar_cx, sub_top, subtitle, sub_font, (89, 82, 151), LOG_IMAGE_MUTED, h_padding=22, v_padding=8, radius=18, max_width=card_w - 180)
 
-    details_x1 = card_x + 38
-    details_x2 = card_x + card_w - 38
-    details_y1 = sub_top + 48
-    details_y2 = card_y + card_h - 28
-    draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=22, fill=(64, 58, 123))
+    # detalhe do nome pequeno acima da caixa de detalhes
+    person_name = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
+    name_w, name_h = _text_size(draw, person_name, badge_font)
+    draw.text((avatar_cx - name_w // 2, sub_top + 44), person_name, font=badge_font, fill=LOG_IMAGE_MUTED)
+
+    details_x1 = card_x + 40
+    details_x2 = card_x + card_w - 40
+    details_y1 = sub_top + 72
+    details_y2 = card_y + card_h - 26
+    draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=(64, 58, 123))
     draw.text((details_x1 + 18, details_y1 + 14), 'Detalhes do evento', font=label_font, fill=LOG_IMAGE_MUTED)
 
     body_lines = _wrap_text(draw, mensagem or '(sem conteúdo)', body_font, details_x2 - details_x1 - 36)
     line_h = 28
-    y = details_y1 + 46
+    y = details_y1 + 48
     for line in body_lines[:5]:
         draw.text((details_x1 + 18, y), line, font=body_font, fill=LOG_IMAGE_TEXT)
         y += line_h
