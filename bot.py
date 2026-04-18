@@ -823,7 +823,7 @@ def mark_cooldown(message: discord.Message, intent: str):
 INTENT_RULES = {
     "site_status": {
         "reply": "🌐 Veja em <#1409296003034644542>",
-        "threshold": 7,
+        "threshold": 6,
         "groups": [
             {"name": "entidade", "terms": ["site", "sistema", "app", "aplicativo", "plataforma"], "weight": 3, "required": True, "cap": 1},
             {"name": "problema", "terms": ["caiu", "fora do ar", "offline", "nao funciona", "nao abre", "saiu do ar", "instavel", "lento", "travando", "bugado", "carregando", "erro"], "weight": 4, "required": True, "cap": 2},
@@ -835,7 +835,7 @@ INTENT_RULES = {
     },
     "support": {
         "reply": "🔐 Para suporte, vá em <#1479642544429076500>",
-        "threshold": 7,
+        "threshold": 6,
         "groups": [
             {"name": "assunto", "terms": ["login", "senha", "acesso", "conta", "ticket", "suporte", "entrar", "logar", "acessar"], "weight": 3, "required": True, "cap": 2},
             {"name": "problema", "terms": ["nao consigo", "esqueci", "erro", "ajuda", "recuperar", "sem acesso", "problema", "abrir", "como", "falhou", "travou"], "weight": 3, "required": True, "cap": 2},
@@ -859,7 +859,7 @@ INTENT_RULES = {
     },
     "missing_chapters": {
         "reply": "<#1452799882149761144>",
-        "threshold": 7,
+        "threshold": 6,
         "groups": [
             {"name": "assunto", "terms": ["capitulo", "capitulos"], "weight": 3, "required": True, "cap": 2},
             {"name": "problema", "terms": ["faltando", "faltam", "sumiu", "sumiram", "nao tem", "incompleto", "cade", "onde estao", "faltou", "nao veio"], "weight": 4, "required": True, "cap": 2},
