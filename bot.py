@@ -12,7 +12,7 @@ from collections import defaultdict, deque
 from io import BytesIO
 from datetime import datetime
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 
 try:
     from pymongo import MongoClient
@@ -48,11 +48,14 @@ COOLDOWN_USER_INTENT_SECONDS = 25  # mesmo intent pelo mesmo usuário no canal
 CONTEXT_MAX_AGE_SECONDS = 180      # contexto recente considerado válido
 
 # ==================== LOG ====================
-LOG_IMAGE_BG = (18, 18, 24)
-LOG_IMAGE_PANEL = (28, 28, 38)
-LOG_IMAGE_TEXT = (235, 235, 245)
-LOG_IMAGE_MUTED = (150, 150, 170)
-LOG_IMAGE_ACCENT = (88, 166, 255)
+LOG_IMAGE_BG = (7, 21, 48)
+LOG_IMAGE_CARD = (78, 70, 138)
+LOG_IMAGE_CARD_BORDER = (52, 44, 102)
+LOG_IMAGE_TEXT = (241, 243, 255)
+LOG_IMAGE_MUTED = (198, 202, 227)
+LOG_IMAGE_ACCENT = (110, 96, 204)
+LOG_IMAGE_PILL = (69, 61, 125)
+LOG_IMAGE_SHADOW = (0, 0, 0, 90)
 
 
 def _font_paths(bold: bool = False):
@@ -85,11 +88,18 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
         return bbox[2] - bbox[0]
 
 
+def _text_size(draw: ImageDraw.ImageDraw, text: str, font):
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1]
+    except Exception:
+        return _text_width(draw, text, font), getattr(font, 'size', 20)
+
+
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int):
     text = (text or "").strip()
     if not text:
         return [""]
-
     lines = []
     for paragraph in text.splitlines() or [text]:
         words = paragraph.split()
@@ -139,77 +149,135 @@ def _initials_from_member(member) -> str:
     return str(name)[:2].upper() if name else "?"
 
 
-async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=LOG_IMAGE_ACCENT) -> BytesIO:
-    width = 980
-    pad = 28
-    avatar_size = 112
-    header_h = 152
+def _draw_centered_pill(draw, cx, y, text, font, fill, text_fill, h_padding=26, v_padding=10, radius=22, max_width=None):
+    tw, th = _text_size(draw, text, font)
+    pill_w = tw + h_padding * 2
+    pill_h = th + v_padding * 2
+    if max_width and pill_w > max_width:
+        pill_w = max_width
+    x1 = int(cx - pill_w / 2)
+    x2 = int(cx + pill_w / 2)
+    draw.rounded_rectangle((x1, y, x2, y + pill_h), radius=radius, fill=fill)
+    tx = int(cx - tw / 2)
+    ty = y + int((pill_h - th) / 2) - 1
+    draw.text((tx, ty), text, font=font, fill=text_fill)
+    return pill_h
 
-    title_font = _get_font(30, bold=True)
-    meta_font = _get_font(17, bold=False)
-    member_font = _get_font(24, bold=True)
-    body_font = _get_font(21, bold=False)
-    small_font = _get_font(16, bold=False)
 
-    dummy = Image.new("RGB", (width, 200), LOG_IMAGE_BG)
-    draw = ImageDraw.Draw(dummy)
+def _accent_for_title(title: str, accent=None):
+    title = (title or '').lower()
+    if accent:
+        return accent
+    if 'invite' in title or 'mute' in title or 'bloque' in title:
+        return (133, 100, 227)
+    if 'desmute' in title:
+        return (82, 183, 136)
+    if 'auto-reply' in title:
+        return (96, 148, 235)
+    return LOG_IMAGE_ACCENT
 
-    body_x = pad
-    body_w = width - pad * 2
-    if member:
-        body_x = pad + avatar_size + 24
-        body_w = width - body_x - pad
 
-    body_lines = _wrap_text(draw, mensagem or "(sem conteúdo)", body_font, body_w)
-    line_h = 31
-    body_h = max(160, 30 + len(body_lines) * line_h + 28)
-    height = header_h + body_h + pad
+def _draw_background(canvas: Image.Image):
+    draw = ImageDraw.Draw(canvas)
+    w, h = canvas.size
+    draw.rectangle((0, 0, w, h), fill=LOG_IMAGE_BG)
+    draw.ellipse((-180, -120, 420, 300), fill=(10, 28, 59))
+    draw.ellipse((w - 420, -140, w + 120, 260), fill=(9, 28, 63))
+    draw.ellipse((w - 260, h - 220, w + 100, h + 40), fill=(12, 41, 84))
+    draw.rectangle((0, h - 92, w, h), fill=(27, 106, 170))
+    draw.ellipse((68, h - 132, 152, h - 54), fill=(116, 182, 226))
+    draw.ellipse((86, h - 120, 132, h - 76), fill=(140, 205, 240))
+    draw.line((94, h - 150, 88, h - 166), fill=(91, 176, 227), width=3)
+    draw.line((108, h - 146, 112, h - 164), fill=(91, 176, 227), width=3)
 
-    img = Image.new("RGB", (width, height), LOG_IMAGE_BG)
-    draw = ImageDraw.Draw(img)
 
-    # painel principal
-    draw.rounded_rectangle((16, 16, width - 16, height - 16), radius=24, fill=LOG_IMAGE_PANEL)
-    draw.rounded_rectangle((16, 16, 28, height - 16), radius=8, fill=accent)
+def _draw_blob(draw, x, y, fill, outline=None):
+    draw.ellipse((x, y + 8, x + 94, y + 62), fill=fill, outline=outline, width=3 if outline else 0)
+    draw.ellipse((x + 52, y - 4, x + 112, y + 50), fill=fill, outline=outline, width=3 if outline else 0)
+    draw.ellipse((x + 12, y - 8, x + 58, y + 30), fill=fill, outline=outline, width=3 if outline else 0)
 
-    # header
-    draw.text((pad, 28), title, font=title_font, fill=LOG_IMAGE_TEXT)
-    guild_name = guild.name if guild else "Servidor desconhecido"
-    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    draw.text((pad, 72), f"Servidor: {guild_name}", font=meta_font, fill=LOG_IMAGE_MUTED)
-    draw.text((pad, 98), f"Horário: {timestamp}", font=meta_font, fill=LOG_IMAGE_MUTED)
 
-    # avatar / infos do meliante
-    body_top = header_h
-    if member:
-        avatar_raw = await _avatar_bytes(member)
-        if avatar_raw:
-            avatar_img = _crop_circle(Image.open(BytesIO(avatar_raw)), avatar_size)
-        else:
-            avatar_img = Image.new("RGBA", (avatar_size, avatar_size), (60, 60, 78, 255))
-            av_draw = ImageDraw.Draw(avatar_img)
-            av_draw.ellipse((0, 0, avatar_size - 1, avatar_size - 1), fill=(60, 60, 78, 255))
-            av_draw.text((avatar_size // 2 - 16, avatar_size // 2 - 14), _initials_from_member(member), font=_get_font(34, bold=True), fill=(255, 255, 255))
-        img.paste(avatar_img, (pad, body_top), avatar_img)
-        name = getattr(member, 'display_name', None) or getattr(member, 'name', None) or str(member)
-        draw.text((body_x, body_top + 4), str(name), font=member_font, fill=LOG_IMAGE_TEXT)
-        draw.text((body_x, body_top + 40), f"ID: {getattr(member, 'id', 'desconhecido')}", font=meta_font, fill=LOG_IMAGE_MUTED)
-        mention = getattr(member, 'mention', None) or 'sem mention'
-        draw.text((body_x, body_top + 66), f"Menção: {mention}", font=small_font, fill=LOG_IMAGE_MUTED)
+async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=None) -> BytesIO:
+    width, height = 960, 540
+    accent = _accent_for_title(title, accent)
+
+    label_font = _get_font(16, bold=True)
+    meta_font = _get_font(14, bold=False)
+    hero_font = _get_font(26, bold=True)
+    sub_font = _get_font(18, bold=False)
+    body_font = _get_font(20, bold=False)
+    small_font = _get_font(15, bold=False)
+
+    canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
+    _draw_background(canvas)
+
+    shadow = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    sh_draw = ImageDraw.Draw(shadow)
+    card_w, card_h = 630, 282
+    card_x = (width - card_w) // 2
+    card_y = 118
+    sh_draw.rounded_rectangle((card_x + 8, card_y + 12, card_x + card_w + 8, card_y + card_h + 12), radius=38, fill=LOG_IMAGE_SHADOW)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(12))
+    canvas = Image.alpha_composite(canvas.convert('RGBA'), shadow)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle((card_x, card_y, card_x + card_w, card_y + card_h), radius=36, fill=LOG_IMAGE_CARD, outline=LOG_IMAGE_CARD_BORDER, width=6)
+    _draw_blob(draw, card_x + card_w - 116, card_y - 16, fill=accent, outline=LOG_IMAGE_CARD_BORDER)
+
+    badge_text = (guild.name if guild else 'Discord')[:18]
+    badge_w = max(120, min(190, int(len(badge_text) * 10) + 60))
+    badge_h = 52
+    badge_x = card_x + 22
+    badge_y = card_y + 18
+    draw.rounded_rectangle((badge_x, badge_y, badge_x + badge_w, badge_y + badge_h), radius=16, fill=LOG_IMAGE_PILL)
+    draw.text((badge_x + 14, badge_y + 8), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((badge_x + 14, badge_y + 24), badge_text, font=label_font, fill=LOG_IMAGE_TEXT)
+
+    cx = card_x + card_w - 56
+    cy = card_y + 34
+    draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
+    draw.line((cx + 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
+
+    avatar_size = 138
+    avatar_cx = card_x + card_w // 2
+    avatar_y = card_y + 24
+    avatar_raw = await _avatar_bytes(member)
+    if avatar_raw:
+        avatar_img = _crop_circle(Image.open(BytesIO(avatar_raw)), avatar_size)
     else:
-        draw.text((pad, body_top + 8), "Evento do sistema", font=member_font, fill=LOG_IMAGE_TEXT)
+        avatar_img = Image.new('RGBA', (avatar_size, avatar_size), (0, 0, 0, 0))
+        av_draw = ImageDraw.Draw(avatar_img)
+        av_draw.ellipse((0, 0, avatar_size - 1, avatar_size - 1), fill=(40, 36, 83), outline=(16, 14, 35), width=4)
+        initials = _initials_from_member(member)
+        f = _get_font(42, bold=True)
+        tw, th = _text_size(av_draw, initials, f)
+        av_draw.text(((avatar_size - tw) / 2, (avatar_size - th) / 2 - 2), initials, font=f, fill=(255, 255, 255))
+    canvas.paste(avatar_img, (avatar_cx - avatar_size // 2, avatar_y), avatar_img)
+    draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(16, 14, 35), width=4)
 
-    # caixa da mensagem
-    box_top = body_top + 118 if member else body_top + 52
-    draw.rounded_rectangle((pad, box_top, width - pad, height - pad), radius=18, fill=(34, 34, 46))
-    draw.text((pad + 18, box_top + 16), "Detalhes", font=_get_font(18, bold=True), fill=LOG_IMAGE_MUTED)
-    y = box_top + 48
-    for line in body_lines:
-        draw.text((pad + 18, y), line, font=body_font, fill=LOG_IMAGE_TEXT)
+    pill_top = avatar_y + avatar_size + 18
+    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Log', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, max_width=card_w - 120)
+
+    subtitle = f"Usuário #{getattr(member, 'id', '---')}" if member else "Evento interno do bot"
+    sub_top = pill_top + 50
+    _draw_centered_pill(draw, avatar_cx, sub_top, subtitle, sub_font, (89, 82, 151), LOG_IMAGE_MUTED, h_padding=20, v_padding=8, radius=18, max_width=card_w - 160)
+
+    details_x1 = card_x + 38
+    details_x2 = card_x + card_w - 38
+    details_y1 = sub_top + 48
+    details_y2 = card_y + card_h - 28
+    draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=22, fill=(64, 58, 123))
+    draw.text((details_x1 + 18, details_y1 + 14), 'Detalhes do evento', font=label_font, fill=LOG_IMAGE_MUTED)
+
+    body_lines = _wrap_text(draw, mensagem or '(sem conteúdo)', body_font, details_x2 - details_x1 - 36)
+    line_h = 28
+    y = details_y1 + 46
+    for line in body_lines[:5]:
+        draw.text((details_x1 + 18, y), line, font=body_font, fill=LOG_IMAGE_TEXT)
         y += line_h
 
     bio = BytesIO()
-    img.save(bio, format="PNG")
+    canvas.convert('RGB').save(bio, format='PNG')
     bio.seek(0)
     return bio
 
