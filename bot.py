@@ -236,7 +236,7 @@ def _paste_glow(canvas: Image.Image, box, color, blur=24, alpha=125, radius=28):
 
 
 async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=None) -> BytesIO:
-    width, height = 1024, 576
+    width, height = 1024, 700
     accent = _accent_for_title(title, accent)
 
     badge_font = _get_font(16, bold=True)
@@ -250,10 +250,29 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     _draw_background(canvas)
     canvas = canvas.convert('RGBA')
 
-    card_w, card_h = 676, 306
+    # layout base
+    card_w = 676
     card_x = (width - card_w) // 2
-    card_y = 120
+    card_y = 92
 
+    avatar_size = 144
+    avatar_y = card_y + 24
+    pill_top = avatar_y + avatar_size + 16
+    sub_top = pill_top + 52
+
+    # mede o conteúdo antes de definir a altura final do card
+    dummy = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    dummy_draw = ImageDraw.Draw(dummy)
+    body_max_width = card_w - 80 - 36
+    body_lines = _wrap_text(dummy_draw, mensagem or '(sem conteúdo)', body_font, body_max_width)
+    visible_lines = body_lines[:5]
+    line_h = 28
+    details_y1 = sub_top + 72
+    body_box_h = 64 + len(visible_lines) * line_h + 24
+    details_y2 = details_y1 + body_box_h
+    card_h = max(420, (details_y2 - card_y) + 28)
+
+    # sombra/glow
     canvas = _paste_glow(canvas, (card_x - 8, card_y - 8, card_x + card_w + 8, card_y + card_h + 8), accent, blur=32, alpha=90, radius=42)
     shadow = Image.new('RGBA', (width, height), (0, 0, 0, 0))
     sh_draw = ImageDraw.Draw(shadow)
@@ -283,7 +302,7 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     draw.text((badge_x + 54, badge_y + 10), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
     draw.text((badge_x + 54, badge_y + 27), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
 
-    # chevron e detalhe superior direito
+    # chevron + detalhe canto superior direito
     cx = card_x + card_w - 60
     cy = card_y + 36
     draw.line((cx - 12, cy, cx, cy + 12), fill=LOG_IMAGE_MUTED, width=6)
@@ -292,9 +311,7 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     draw.arc((card_x + card_w - 82, card_y - 26, card_x + card_w - 58, card_y - 2), 200, 330, fill=accent, width=3)
 
     # avatar central com anéis
-    avatar_size = 144
     avatar_cx = card_x + card_w // 2
-    avatar_y = card_y + 24
     avatar_ring_box = (avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10)
     canvas = _paste_glow(canvas, avatar_ring_box, accent, blur=18, alpha=70, radius=999)
     draw = ImageDraw.Draw(canvas)
@@ -313,29 +330,24 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(14, 12, 32), width=4)
     draw.ellipse((avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10), outline=accent, width=2)
 
-    pill_top = avatar_y + avatar_size + 16
+    # título e subtítulo em pills
     _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Log', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, max_width=card_w - 138)
-
     subtitle = f"Você é o membro #{getattr(member, 'id', '---')}" if member else "Evento interno do bot"
-    sub_top = pill_top + 52
     _draw_centered_pill(draw, avatar_cx, sub_top, subtitle, sub_font, (89, 82, 151), LOG_IMAGE_MUTED, h_padding=22, v_padding=8, radius=18, max_width=card_w - 180)
 
-    # detalhe do nome pequeno acima da caixa de detalhes
+    # detalhe do nome acima da caixa
     person_name = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
-    name_w, name_h = _text_size(draw, person_name, badge_font)
+    name_w, _ = _text_size(draw, person_name, badge_font)
     draw.text((avatar_cx - name_w // 2, sub_top + 44), person_name, font=badge_font, fill=LOG_IMAGE_MUTED)
 
+    # caixa de detalhes com altura dinâmica
     details_x1 = card_x + 40
     details_x2 = card_x + card_w - 40
-    details_y1 = sub_top + 72
-    details_y2 = card_y + card_h - 26
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=(64, 58, 123))
     draw.text((details_x1 + 18, details_y1 + 14), 'Detalhes do evento', font=label_font, fill=LOG_IMAGE_MUTED)
 
-    body_lines = _wrap_text(draw, mensagem or '(sem conteúdo)', body_font, details_x2 - details_x1 - 36)
-    line_h = 28
     y = details_y1 + 48
-    for line in body_lines[:5]:
+    for line in visible_lines:
         draw.text((details_x1 + 18, y), line, font=body_font, fill=LOG_IMAGE_TEXT)
         y += line_h
 
