@@ -10,8 +10,9 @@ import asyncio
 import unicodedata
 from collections import defaultdict, deque
 from io import BytesIO
+from datetime import datetime
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 try:
     from pymongo import MongoClient
@@ -100,14 +101,14 @@ def _text_size(draw: ImageDraw.ImageDraw, text: str, font):
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int):
-    text = (text or "").strip()
+    text = (text or '').strip()
     if not text:
-        return [""]
+        return ['']
     lines = []
     for paragraph in text.splitlines() or [text]:
         words = paragraph.split()
         if not words:
-            lines.append("")
+            lines.append('')
             continue
         current = words[0]
         for word in words[1:]:
@@ -122,11 +123,11 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int):
 
 
 def _crop_circle(img: Image.Image, size: int = 112) -> Image.Image:
-    img = img.convert("RGB").resize((size, size))
-    mask = Image.new("L", (size, size), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.ellipse((0, 0, size - 1, size - 1), fill=255)
-    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    img = img.convert('RGB').resize((size, size))
+    mask = Image.new('L', (size, size), 0)
+    md = ImageDraw.Draw(mask)
+    md.ellipse((0, 0, size - 1, size - 1), fill=255)
+    out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     out.paste(img, (0, 0))
     out.putalpha(mask)
     return out
@@ -136,8 +137,7 @@ async def _avatar_bytes(member) -> bytes | None:
     if not member:
         return None
     try:
-        avatar = member.display_avatar.with_size(256)
-        return await avatar.read()
+        return await member.display_avatar.with_size(256).read()
     except Exception:
         return None
 
@@ -146,20 +146,19 @@ async def _guild_icon_bytes(guild) -> bytes | None:
     if not guild or not getattr(guild, 'icon', None):
         return None
     try:
-        icon = guild.icon.with_size(128)
-        return await icon.read()
+        return await guild.icon.with_size(128).read()
     except Exception:
         return None
 
 
 def _initials_from_member(member) -> str:
     if not member:
-        return "?"
-    name = getattr(member, "display_name", None) or getattr(member, "name", None) or str(member)
+        return '?'
+    name = getattr(member, 'display_name', None) or getattr(member, 'name', None) or str(member)
     parts = [p for p in str(name).split() if p]
     if len(parts) >= 2:
         return (parts[0][0] + parts[1][0]).upper()
-    return str(name)[:2].upper() if name else "?"
+    return str(name)[:2].upper() if name else '?'
 
 
 def _draw_centered_pill(draw, cx, y, text, font, fill, text_fill, h_padding=24, v_padding=9, radius=22, max_width=None):
@@ -217,8 +216,6 @@ def _draw_background(canvas: Image.Image):
     draw.line((0, h - 78, w, h - 78), fill=LOG_IMAGE_BLUE, width=2)
     draw.ellipse((82, h - 128, 168, h - 54), fill=(85, 166, 222))
     draw.ellipse((106, h - 118, 146, h - 82), fill=(130, 204, 240))
-    draw.line((102, h - 146, 95, h - 163), fill=(91, 176, 227), width=3)
-    draw.line((118, h - 142, 122, h - 160), fill=(91, 176, 227), width=3)
 
 
 def _draw_blob(draw, x, y, fill, outline=None):
@@ -235,45 +232,7 @@ def _paste_glow(canvas: Image.Image, box, color, blur=24, alpha=115, radius=28):
     return Image.alpha_composite(canvas, glow)
 
 
-def _summarize_log_message(title: str, mensagem: str) -> tuple[str, str, str]:
-    raw = (mensagem or '').strip()
-    title_l = (title or '').lower()
-    upper = title or 'Evento registrado'
-    line1 = raw
-    line2 = ''
-
-    if 'auto-reply' in title_l:
-        upper = 'Resposta automática enviada' if 'enviado' in title_l else 'Resposta automática'
-        m_intent = re.search(r'intent=([^;]+)', raw)
-        intent = m_intent.group(1).strip() if m_intent else 'detecção contextual'
-        line1 = f'Motivo: {intent}'
-        line2 = 'Ação aplicada no canal com sucesso'
-    elif 'invite' in title_l:
-        upper = 'Invite bloqueado'
-        line1 = 'Mensagem removida do servidor'
-        line2 = 'Mute automático de 10 minutos aplicado'
-    elif 'membro mutado' in title_l or 'mute' in title_l:
-        upper = 'Usuário mutado'
-        line1 = 'Penalidade aplicada pelo bot'
-        line2 = 'Verifique o canal de logs para mais detalhes'
-    elif 'desmute' in title_l:
-        upper = 'Usuário desmutado'
-        line1 = 'Cargo Muted removido com sucesso'
-        line2 = 'Evento registrado pelo sistema'
-    elif raw:
-        parts = raw.split(':', 1)
-        if len(parts) == 2:
-            upper = title or 'Evento registrado'
-            line1 = parts[1].strip()
-        else:
-            line1 = raw
-
-    line1 = line1[:88]
-    line2 = line2[:88]
-    return upper, line1, line2
-
-
-async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=None) -> BytesIO:
+async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', accent=None) -> BytesIO:
     width, height = 1024, 700
     accent = _accent_for_title(title, accent)
 
@@ -284,9 +243,15 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     label_font = _get_font(17, bold=True)
     small_font = _get_font(14, bold=False)
 
-    card_title, line1, line2 = _summarize_log_message(title, mensagem)
+    name_text = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
+    lines = [
+        ('Nome', name_text),
+        ('Chat', channel_name or 'sistema'),
+        ('Motivo', reason or 'não informado'),
+        ('Ação', action or 'não informada'),
+    ]
 
-    card_w = 720
+    card_w = 740
     card_x = (width - card_w) // 2
     card_y = 108
     avatar_size = 146
@@ -298,20 +263,19 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     dummy_draw = ImageDraw.Draw(dummy)
     details_x1 = card_x + 34
     details_x2 = card_x + card_w - 34
-    body_max_w = details_x2 - details_x1 - 36
-    summary_lines = []
-    for line in [line1, line2]:
-        if line:
-            wrapped = _wrap_text(dummy_draw, line, body_font, body_max_w)
-            summary_lines.extend(wrapped[:2])
-    if not summary_lines:
-        summary_lines = ['(sem detalhes)']
-
+    body_max_w = details_x2 - details_x1 - 170
+    rendered = []
+    for label, value in lines:
+        wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w)
+        if not wrapped:
+            wrapped = ['']
+        rendered.append((label, wrapped[:2]))
     line_h = 28
+    detail_rows = sum(len(v) for _, v in rendered)
     details_y1 = sub_top + 52
-    content_h = 58 + (len(summary_lines) * line_h) + 20
+    content_h = 64 + detail_rows * line_h + 24
     details_y2 = details_y1 + content_h
-    card_h = max(360, (details_y2 - card_y) + 28)
+    card_h = max(370, (details_y2 - card_y) + 28)
 
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
@@ -369,18 +333,25 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     draw.ellipse((avatar_cx - avatar_size // 2 - 4, avatar_y - 4, avatar_cx + avatar_size // 2 + 4, avatar_y + avatar_size + 4), outline=(14, 12, 32), width=4)
     draw.ellipse((avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10), outline=accent, width=2)
 
-    _draw_centered_pill(draw, avatar_cx, pill_top, card_title, hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=34, v_padding=10, radius=24, max_width=card_w - 160)
-    subtitle = f"Usuário: {getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema'}" if member else 'Evento interno do bot'
-    _draw_centered_pill(draw, avatar_cx, sub_top, subtitle[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=24, v_padding=8, radius=18, max_width=card_w - 180)
+    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Evento registrado', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=34, v_padding=10, radius=24, max_width=card_w - 160)
+    _draw_centered_pill(draw, avatar_cx, sub_top, name_text[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=24, v_padding=8, radius=18, max_width=card_w - 180)
 
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
     draw.text((details_x1 + 18, details_y1 + 14), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
     draw.line((details_x1 + 18, details_y1 + 42, details_x2 - 18, details_y1 + 42), fill=LOG_IMAGE_LINE, width=1)
 
+    label_w = 112
     y = details_y1 + 58
-    for seg in summary_lines[:4]:
-        draw.text((details_x1 + 18, y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
-        y += line_h
+    for label, parts in rendered:
+        draw.text((details_x1 + 18, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
+        inner_y = y
+        for seg in parts:
+            draw.text((details_x1 + 18 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
+            inner_y += line_h
+        y = inner_y + 4
+
+    stamp = datetime.now().strftime('%d/%m/%Y %H:%M')
+    draw.text((card_x + card_w - 158, card_y + card_h - 18), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
 
     bio = BytesIO()
     canvas.convert('RGB').save(bio, format='PNG')
@@ -388,26 +359,27 @@ async def _build_log_image(guild: discord.Guild, mensagem: str, member=None, tit
     return bio
 
 
-async def log(guild: discord.Guild, mensagem: str, member=None, title: str = "Log", accent=LOG_IMAGE_ACCENT):
+async def log(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', accent=LOG_IMAGE_ACCENT):
     try:
         canal = None
         if guild and LOG_CHANNEL_ID:
             canal = guild.get_channel(LOG_CHANNEL_ID)
         if not canal and guild:
-            canal = discord.utils.get(guild.text_channels, name="mod-logs")
+            canal = discord.utils.get(guild.text_channels, name='mod-logs')
         if canal:
             try:
-                image_bytes = await _build_log_image(guild, mensagem, member=member, title=title, accent=accent)
-                arquivo = discord.File(fp=image_bytes, filename="log.png")
+                image_bytes = await _build_log_image(guild, member=member, title=title, channel_name=channel_name, reason=reason, action=action, accent=accent)
+                arquivo = discord.File(fp=image_bytes, filename='log.png')
                 await canal.send(file=arquivo)
             except Exception as img_err:
-                print("[LOG WARN] Falha ao gerar/enviar log em imagem:", img_err)
+                print('[LOG WARN] Falha ao gerar/enviar log em imagem:', img_err)
                 traceback.print_exc()
-                await canal.send(mensagem)
+                resumo = f"{title} | Nome: {(getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'} | Chat: {channel_name or 'sistema'} | Motivo: {reason} | Ação: {action}"
+                await canal.send(resumo)
         else:
-            print("[LOG]", mensagem)
+            print('[LOG]', title, channel_name, reason, action)
     except Exception:
-        print("[LOG ERROR] Falha ao enviar log:")
+        print('[LOG ERROR] Falha ao enviar log:')
         traceback.print_exc()
 
 # ==================== MONGO ====================
@@ -595,7 +567,7 @@ async def mute_member(guild: discord.Guild, member: discord.Member):
             await member.add_roles(role, reason="Muted por envio de invite/propaganda")
             info = f"🔇 {member.mention} ({member.id}) foi mutado por envio de invite/propaganda."
             try:
-                await log(guild, info, member=member, title="Membro mutado")
+                await log(guild, member=member, title="Usuário mutado", channel_name="sistema", reason="Envio de invite/propaganda", action="Cargo Muted aplicado")
             except Exception:
                 print("[MUTE LOG WARN] Falha ao logar mute no canal de logs.")
             return True
@@ -827,7 +799,7 @@ async def _schedule_unmute(guild_id: int, member_id: int, delay_seconds: int):
             try:
                 await member.remove_roles(role, reason="Unmute automático (10 minutos expirados)")
                 try:
-                    await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado automaticamente (10m).", member=member, title="Desmute automático")
+                    await log(guild, member=member, title="Desmute automático", channel_name="sistema", reason="Tempo de 10 minutos expirou", action="Cargo Muted removido")
                 except Exception:
                     pass
             except Exception as e:
@@ -873,7 +845,7 @@ async def mute_member_with_duration(guild: discord.Guild, member: discord.Member
             asyncio.create_task(_schedule_unmute(guild.id, member.id, int(seconds)))
 
         try:
-            await log(guild, f"🔇 {member.mention} ({member.id}) mutado automaticamente por 10 minutos (envio de invite).", member=member, title="Mute automático")
+            await log(guild, member=member, title="Mute automático", channel_name="sistema", reason="Envio de invite detectado", action="Mute de 10 minutos aplicado")
         except Exception:
             pass
 
@@ -913,7 +885,7 @@ async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
             traceback.print_exc()
 
         try:
-            await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado.", member=member, title="Desmute manual")
+            await log(guild, member=member, title="Desmute manual", channel_name="sistema", reason="Comando de moderação", action="Cargo Muted removido")
         except Exception:
             pass
 
@@ -1417,7 +1389,7 @@ async def on_message(message: discord.Message):
                         ok = await mute_member_with_duration(message.guild, membro, seconds=600)
                         if not ok:
                             print("[MOD WARN] Não foi possível aplicar mute automático.")
-                    await log(message.guild, f"⚠️ {message.author} enviou invite e foi mutado por 10m: {message.content}", member=message.author, title="Invite bloqueado")
+                    await log(message.guild, member=message.author, title="Invite bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason="Invite detectado na mensagem", action="Mensagem removida e mute de 10 minutos aplicado")
             except Exception as e:
                 print("[BLOQUEIO WARN] Erro ao processar invite:", e)
                 traceback.print_exc()
@@ -1434,7 +1406,7 @@ async def on_message(message: discord.Message):
                 if cd["user_wait"] > 0:
                     why_blocked.append(f"cooldown_usuario={cd['user_wait']}s")
                 if message.guild:
-                    await log(message.guild, f"⏳ Resposta automática bloqueada para {message.author.mention}: intent={result['intent']} ; {' ; '.join(why_blocked)} ; {explain_reason(result)}", member=message.author, title="Auto-reply bloqueado")
+                    await log(message.guild, member=message.author, title="Auto-reply bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Cooldown ativo: {' ; '.join(why_blocked)}", action=f"Resposta da intent {result['intent']} não foi enviada")
             else:
                 remember_context(message, result["intent"], result["score"], result["matched_groups"], result["reply"])
                 mark_cooldown(message, result["intent"])
@@ -1444,7 +1416,7 @@ async def on_message(message: discord.Message):
                     print("[AUTO-REPLY WARN] Falha ao enviar resposta automática:", e)
                     traceback.print_exc()
                 if message.guild:
-                    await log(message.guild, f"🤖 Resposta automática enviada para {message.author.mention}: {explain_reason(result)}", member=message.author, title="Auto-reply enviado")
+                    await log(message.guild, member=message.author, title="Auto-reply enviado", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Intent detectada: {result['intent']}", action="Resposta automática enviada com sucesso")
                 return
 
         # Interações dirigidas ao bot (DM ou menção)
@@ -1501,7 +1473,7 @@ async def on_ready():
                             if role and role in member.roles:
                                 try:
                                     await member.remove_roles(role, reason="Unmute pós-restart (tempo expirado)")
-                                    await log(guild, f"🔊 {member.mention} ({member.id}) foi desmutado (tempo expirado durante reinício).", member=member, title="Desmute pós-restart")
+                                    await log(guild, member=member, title="Desmute pós-restart", channel_name="sistema", reason="Tempo expirado durante reinício", action="Cargo Muted removido")
                                 except Exception:
                                     pass
                     try:
