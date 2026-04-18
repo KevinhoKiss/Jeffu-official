@@ -675,7 +675,12 @@ def _mentions_jeffu(message: discord.Message) -> bool:
             return True
         for m in getattr(message, "mentions", []):
             try:
-                name = (getattr(m, "display_name", None) or getattr(m, "name", "") or "").lower()
+                # display_name existe em Member; em User usamos name
+                name = ""
+                if hasattr(m, "display_name"):
+                    name = (m.display_name or m.name or "").lower()
+                else:
+                    name = (getattr(m, "name", "") or "").lower()
                 if "jeffu" in name:
                     return True
             except Exception:
@@ -695,12 +700,11 @@ BAD_WORDS_PATTERN = re.compile(
 @bot.event
 async def on_message(message: discord.Message):
     try:
+        # ignora bots e webhooks
         if message.author.bot:
             return
-
         if getattr(message, "webhook_id", None) is not None:
             return
-
         if not message.content and message.embeds:
             return
 
@@ -736,6 +740,7 @@ async def on_message(message: discord.Message):
             traceback.print_exc()
 
         texto = (message.content or "").strip()
+        lower = texto.lower()
 
         # BLOQUEIO DE INVITES (10m automático)
         if INVITE_REGEX.search(message.content or ""):
@@ -760,9 +765,25 @@ async def on_message(message: discord.Message):
                 traceback.print_exc()
             return
 
-        # REGRAS AUTOMÁTICAS (respostas rápidas)
-        lower = texto.lower()
+        # ===== GREETINGS: responder a qualquer mensagem que contenha saudação =====
+        # agora responde a "bom dia", "boa tarde", "boa noite" mesmo sem menção ao bot
+        saudacoes = {
+            "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
+            "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+            "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>"
+        }
+        # procura a primeira saudação presente no texto
+        for chave, resposta in saudacoes.items():
+            if chave in lower:
+                try:
+                    await message.reply(resposta, mention_author=False)
+                except Exception as e:
+                    print("[GREET WARN] Falha ao enviar saudação:", e)
+                    traceback.print_exc()
+                # responde apenas uma saudação por mensagem
+                return
 
+        # REGRAS AUTOMÁTICAS (respostas rápidas)
         palavras_chave = ["login", "senha", "esqueci", "não consigo", "nao consigo", "acesso", "ajuda", "ticket", "suporte"]
         if any(p in lower for p in palavras_chave):
             await message.reply("🔐 Para suporte, vá em <#1479642544429076500>", mention_author=False)
@@ -784,7 +805,7 @@ async def on_message(message: discord.Message):
             "onde estão os capítulos", "onde estao os capitulos"
         ]
         if any(frase in lower for frase in frases_capitulos):
-            await message.reply("O <#1452799882149761144> serve para isso <:suspect:1466766825361641634>", mention_author=False)
+            await message.reply("<#1452799882149761144>", mention_author=False)
             return
 
         # Interações dirigidas ao bot (DM ou menção)
@@ -792,33 +813,12 @@ async def on_message(message: discord.Message):
         mentions_bot = bot.user in message.mentions if bot.user else False
         should_respond_personal = is_dm or mentions_bot
 
-        if message.author.bot:
-            return
-
-        print(f"📨 {message.author}: {message.content}")
-        texto = message.content.lower()
-        texto_limpo = texto.strip()
-
-
-            saudacoes = {
-               "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-               "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-               "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
-               "chame o ademiro": "Perdão, levar mute não esta em meus planos hoje<:baka:1466594678064545984>"
-           }
-
-           for chave in saudacoes:
-               if texto_limpo.startswith(chave):
-                   await message.reply(saudacoes[chave], mention_author=False)
-                   return
-        
-
-            # responde agradecimentos apenas se mencionar 'jeffu'
-            if re.search(r"(agradecido|obg|obrigado|vlw)", texto, re.IGNORECASE) and _mentions_jeffu(message):
+        if should_respond_personal:
+            # agradecimentos e "te amo" agora exigem menção/substring 'jeffu'
+            if re.search(r"(agradecido|obg|obrigado)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
                 return
 
-            # responde "te amo" apenas se mencionar 'jeffu'
             if re.search(r"(te amo|amo vc|amo você|amo voce)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
                 return
