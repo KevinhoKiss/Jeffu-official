@@ -693,7 +693,7 @@ def _mentions_jeffu(message: discord.Message) -> bool:
 INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
 
 BAD_WORDS_PATTERN = re.compile(
-    r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto)\b(?:.*(?:jeffu|<@!?\d+>))?",
+    r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?",
     re.IGNORECASE
 )
 
