@@ -370,11 +370,15 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
 def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
     return datetime.now(ZoneInfo("America/Sao_Paulo")).strftime(fmt)
 
-    draw.text((card_x + card_w - 150, card_y + card_h - 22), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
-    bio = BytesIO()
-    canvas.convert('RGB').save(bio, format='PNG')
-    bio.seek(0)
-    return bio
+stamp = _agora_brasil_str('%d/%m/%Y %H:%M')
+draw.text((card_x + card_w - 150, card_y + card_h - 22), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
+
+bio = BytesIO()
+canvas.convert('RGB').save(bio, format='PNG')
+bio.seek(0)
+return bio
+``
+    
 
 
 async def log(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=LOG_IMAGE_ACCENT):
