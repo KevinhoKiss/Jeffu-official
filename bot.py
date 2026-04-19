@@ -21,7 +21,7 @@ except Exception:
 
 # ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
-LOG_CHANNEL_ID = 1466542559730991164
+LOG_CHANNEL_ID = 1495200091974271209
 
 intents = discord.Intents.default()
 intents.message_content = True
