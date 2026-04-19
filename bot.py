@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 from io import BytesIO
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from zoneinfo import ZoneInfo
 
 try:
     from pymongo import MongoClient
@@ -281,7 +282,7 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
 
 
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
-    width, height = 1000, 820
+    width, height = 1180, 940
     accent = _accent_for_title(title, accent)
     badge_font = _get_font(22, True)
     hero_font = _get_font(52, True)
@@ -365,7 +366,10 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
             draw.text((details_x1 + 20 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
             inner_y += line_h
         y = inner_y + 4
-    stamp = datetime.now().strftime('%d/%m/%Y %H:%M')
+    
+def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).strftime(fmt)
+
     draw.text((card_x + card_w - 150, card_y + card_h - 22), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
     bio = BytesIO()
     canvas.convert('RGB').save(bio, format='PNG')
