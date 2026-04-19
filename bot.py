@@ -301,12 +301,12 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     dummy = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     dummy_draw = ImageDraw.Draw(dummy)
     details_x1, details_x2 = card_x + 34, card_x + card_w - 34
-    body_max_w = details_x2 - details_x1 - 220
+    body_max_w = details_x2 - details_x1 - 300
     rendered = []
     for label, value in lines:
         wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w) or ['']
         rendered.append((label, wrapped[:3 if label == 'Mensagem' else 2]))
-    line_h = 36
+    line_h = 56
     detail_rows = sum(len(v) for _, v in rendered)
     details_y1 = sub_top + 72
     content_h = 80 + detail_rows * line_h + 28
@@ -356,7 +356,7 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
     draw.text((details_x1 + 20, details_y1 + 16), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
     draw.line((details_x1 + 20, details_y1 + 52, details_x2 - 20, details_y1 + 52), fill=LOG_IMAGE_LINE, width=1)
-    label_w = 145
+    label_w = 200
     y = details_y1 + 72
     for label, parts in rendered:
         draw.text((details_x1 + 20, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
