@@ -24,8 +24,8 @@ MENSAGEM_DM_BAN = (
     "⚠️ Você foi banido automaticamente por enviar convite/propaganda no servidor.\n"
     "Se acreditar que foi um engano, entre em contato com a staff."
 )
-COOLDOWN_INTENT_SECONDS = 5
-COOLDOWN_USER_INTENT_SECONDS = 5
+COOLDOWN_INTENT_SECONDS = 3
+COOLDOWN_USER_INTENT_SECONDS = 3
 CONTEXT_MAX_AGE_SECONDS = 180
 INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com/invite|app\.com/invite)/[A-Za-z0-9\-]+)", re.IGNORECASE)
 BAD_WORDS_PATTERN = re.compile(r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?", re.IGNORECASE)
@@ -283,12 +283,12 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
     width, height = 1000, 820
     accent = _accent_for_title(title, accent)
-    badge_font = _get_font(42, True)
-    hero_font = _get_font(30, True)
+    badge_font = _get_font(22, True)
+    hero_font = _get_font(52, True)
     sub_font = _get_font(30, False)
-    body_font = _get_font(30, False)
-    label_font = _get_font(44, True)
-    small_font = _get_font(46, False)
+    body_font = _get_font(28, False)
+    label_font = _get_font(24, True)
+    small_font = _get_font(16, False)
     name_text = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
     lines = [('Nome', name_text), ('Chat', channel_name or 'sistema'), ('Motivo', reason or 'não informado'), ('Ação', action or 'não informada'), ('Mensagem', message_text or 'sem mensagem')]
     card_w = 860
@@ -301,12 +301,12 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     dummy = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     dummy_draw = ImageDraw.Draw(dummy)
     details_x1, details_x2 = card_x + 34, card_x + card_w - 34
-    body_max_w = details_x2 - details_x1 - 300
+    body_max_w = details_x2 - details_x1 - 220
     rendered = []
     for label, value in lines:
         wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w) or ['']
         rendered.append((label, wrapped[:3 if label == 'Mensagem' else 2]))
-    line_h = 56
+    line_h = 36
     detail_rows = sum(len(v) for _, v in rendered)
     details_y1 = sub_top + 72
     content_h = 80 + detail_rows * line_h + 28
@@ -356,7 +356,7 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
     draw.text((details_x1 + 20, details_y1 + 16), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
     draw.line((details_x1 + 20, details_y1 + 52, details_x2 - 20, details_y1 + 52), fill=LOG_IMAGE_LINE, width=1)
-    label_w = 200
+    label_w = 145
     y = details_y1 + 72
     for label, parts in rendered:
         draw.text((details_x1 + 20, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
@@ -580,15 +580,15 @@ def mark_cooldown(message, intent):
     LAST_USER_INTENT_REPLY_TS[(_user_channel_key(message), intent)] = now
 
 INTENT_RULES = {
-    'site_status': {'reply': '🌐 Veja em <#1409296003034644542>', 'threshold': 5, 'groups': [
+    'site_status': {'reply': '🌐 Veja em <#1409296003034644542>', 'threshold': 7, 'groups': [
         {'name': 'entidade', 'terms': ['site', 'sistema', 'app', 'aplicativo', 'plataforma'], 'weight': 3, 'required': True, 'cap': 1},
         {'name': 'problema', 'terms': ['caiu', 'fora do ar', 'offline', 'nao funciona', 'nao abre', 'saiu do ar', 'instavel', 'lento', 'travando', 'bugado', 'carregando', 'erro'], 'weight': 4, 'required': True, 'cap': 2},
     ], 'followup_terms': ['continua', 'ainda', 'voltou', 'normalizou', 'agora', 'ruim', 'instavel', 'lento', 'fora', 'piorou', 'melhorou'], 'negatives': ['site bonito', 'site lindo', 'gostei do site', 'nome do site'], 'context_boost_user': 5, 'context_boost_channel': 3},
-    'support': {'reply': '🔐 Para suporte, vá em <#1479642544429076500>', 'threshold': 5, 'groups': [
+    'support': {'reply': '🔐 Para suporte, vá em <#1479642544429076500>', 'threshold': 6, 'groups': [
         {'name': 'assunto', 'terms': ['login', 'senha', 'acesso', 'conta', 'ticket', 'suporte', 'entrar', 'logar', 'acessar'], 'weight': 3, 'required': True, 'cap': 2},
         {'name': 'problema', 'terms': ['nao consigo', 'não consigo', 'esqueci', 'erro', 'ajuda', 'recuperar', 'sem acesso', 'problema', 'abrir', 'como', 'falhou', 'travou', 'nao entra', 'não entra'], 'weight': 3, 'required': True, 'cap': 2},
     ], 'followup_terms': ['continua', 'ainda', 'deu ruim', 'nao foi', 'não foi', 'nao resolveu', 'não resolveu', 'nao deu', 'não deu', 'continua igual'], 'negatives': ['minha senha e forte', 'gostei da senha', 'troquei minha senha e pronto'], 'context_boost_user': 5, 'context_boost_channel': 2},
-    'obra_suggestion': {'reply': '📚 Sugestões de obras é em <#1466087941506990171>', 'threshold': 5, 'groups': [
+    'obra_suggestion': {'reply': '📚 Sugestões de obras é em <#1466087941506990171>', 'threshold': 6, 'groups': [
         {'name': 'midia', 'terms': ['obra', 'obras', 'manga', 'manhwa', 'novel', 'titulo', 'titulos'], 'weight': 2, 'required': True, 'cap': 2},
         {'name': 'intencao', 'terms': ['sugestao', 'sugestoes', 'indicar', 'indicacao', 'recomendar', 'recomendacao'], 'weight': 4, 'required': True, 'cap': 2},
     ], 'followup_terms': ['onde sugiro', 'onde mando', 'tem canal', 'posso indicar'], 'negatives': ['obra boa', 'essa obra e ruim', 'terminei a obra'], 'context_boost_user': 4, 'context_boost_channel': 2},
