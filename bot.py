@@ -24,8 +24,8 @@ MENSAGEM_DM_BAN = (
     "⚠️ Você foi banido automaticamente por enviar convite/propaganda no servidor.\n"
     "Se acreditar que foi um engano, entre em contato com a staff."
 )
-COOLDOWN_INTENT_SECONDS = 45
-COOLDOWN_USER_INTENT_SECONDS = 25
+COOLDOWN_INTENT_SECONDS = 5
+COOLDOWN_USER_INTENT_SECONDS = 5
 CONTEXT_MAX_AGE_SECONDS = 180
 INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com/invite|app\.com/invite)/[A-Za-z0-9\-]+)", re.IGNORECASE)
 BAD_WORDS_PATTERN = re.compile(r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?", re.IGNORECASE)
