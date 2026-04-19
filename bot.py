@@ -283,12 +283,12 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
     width, height = 1000, 820
     accent = _accent_for_title(title, accent)
-    badge_font = _get_font(22, True)
-    hero_font = _get_font(52, True)
-    sub_font = _get_font(30, False)
-    body_font = _get_font(28, False)
-    label_font = _get_font(24, True)
-    small_font = _get_font(16, False)
+    badge_font = _get_font(42, True)
+    hero_font = _get_font(72, True)
+    sub_font = _get_font(50, False)
+    body_font = _get_font(48, False)
+    label_font = _get_font(44, True)
+    small_font = _get_font(46, False)
     name_text = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
     lines = [('Nome', name_text), ('Chat', channel_name or 'sistema'), ('Motivo', reason or 'não informado'), ('Ação', action or 'não informada'), ('Mensagem', message_text or 'sem mensagem')]
     card_w = 860
