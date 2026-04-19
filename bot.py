@@ -60,7 +60,7 @@ LOG_BODY_FONT_SIZE = 48
 LOG_LABEL_FONT_SIZE = 44
 LOG_SMALL_FONT_SIZE = 36
 LOG_LINE_HEIGHT = 56
-LOG_LABEL_WIDTH = 245
+LOG_LABEL_WIDTH = 100
 
 
 def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
