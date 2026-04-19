@@ -21,45 +21,53 @@ except Exception:
 
 # ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
-LOG_CHANNEL_ID = 1495200091974271209
+LOG_CHANNEL_ID = 1466542559730991164
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="/", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 DONO_ID = 766709835701682208
 
 CARGOS_AUTORIZADOS = [
     1464361173305655389,
     1409338610854920374,
-    1409306638548209826
+    1409306638548209826,
 ]
 
 ARQUIVO = "familias.json"
 AUTORIZADOS_FILE = "autorizados.json"
+REACTIONS_FILE = "reactions_rules.json"
+MUTES_FILE = "active_mutes.json"
 
-convites = {}  # convites temporários: {user_id: {"dono": dono_id, "tempo": timestamp}}
+COOLDOWN_INTENT_SECONDS = 10
+COOLDOWN_USER_INTENT_SECONDS = 10
+CONTEXT_MAX_AGE_SECONDS = 180
 
-# ==================== CONFIG DE RESPOSTAS CONTEXTUAIS ====================
-COOLDOWN_INTENT_SECONDS = 45       # mesmo intent no mesmo canal
-COOLDOWN_USER_INTENT_SECONDS = 25  # mesmo intent pelo mesmo usuário no canal
-CONTEXT_MAX_AGE_SECONDS = 180      # contexto recente considerado válido
+INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
+BAD_WORDS_PATTERN = re.compile(
+    r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?",
+    re.IGNORECASE,
+)
 
-# ==================== LOG ====================
+# ==================== LOG EM IMAGEM ====================
 LOG_IMAGE_BG = (6, 6, 8)
 LOG_IMAGE_BG_TOP = (14, 14, 18)
 LOG_IMAGE_CARD = (22, 22, 28)
 LOG_IMAGE_CARD_2 = (30, 30, 38)
 LOG_IMAGE_CARD_BORDER = (58, 58, 70)
-LOG_IMAGE_TEXT = (242, 244, 248)
-LOG_IMAGE_MUTED = (168, 172, 182)
-LOG_IMAGE_ACCENT = (124, 92, 255)
+LOG_IMAGE_TEXT = (300, 300, 300)
+LOG_IMAGE_MUTED = (300, 300, 300)
+LOG_IMAGE_ACCENT = (290, 192, 255)
 LOG_IMAGE_PILL = (37, 37, 48)
 LOG_IMAGE_SHADOW = (0, 0, 0, 135)
 LOG_IMAGE_LINE = (74, 74, 92)
-LOG_IMAGE_BLUE = (51, 118, 255)
+LOG_IMAGE_BLUE = (151, 218, 355)
+
+CHARACTER_ASSET_FILES = ("decor_character.png", "1ONXu.jpg")
+_character_asset_cache = None
 
 
 def _font_paths(bold: bool = False):
@@ -97,18 +105,18 @@ def _text_size(draw: ImageDraw.ImageDraw, text: str, font):
         bbox = draw.textbbox((0, 0), text, font=font)
         return bbox[2] - bbox[0], bbox[3] - bbox[1]
     except Exception:
-        return _text_width(draw, text, font), getattr(font, 'size', 20)
+        return _text_width(draw, text, font), getattr(font, "size", 20)
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int):
-    text = (text or '').strip()
+    text = (text or "").strip()
     if not text:
-        return ['']
+        return [""]
     lines = []
     for paragraph in text.splitlines() or [text]:
         words = paragraph.split()
         if not words:
-            lines.append('')
+            lines.append("")
             continue
         current = words[0]
         for word in words[1:]:
@@ -123,22 +131,18 @@ def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int):
 
 
 def _crop_circle(img: Image.Image, size: int = 112) -> Image.Image:
-    img = img.convert('RGB').resize((size, size))
-    mask = Image.new('L', (size, size), 0)
+    img = img.convert("RGB").resize((size, size), Image.LANCZOS)
+    mask = Image.new("L", (size, size), 0)
     md = ImageDraw.Draw(mask)
     md.ellipse((0, 0, size - 1, size - 1), fill=255)
-    out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     out.paste(img, (0, 0))
     out.putalpha(mask)
     return out
 
 
-CHARACTER_ASSET_FILES = ('decor_character.png', '1ONXu.jpg')
-_character_asset_cache = None
-
-
 def _remove_light_background(img: Image.Image) -> Image.Image:
-    img = img.convert('RGBA')
+    img = img.convert("RGBA")
     w, h = img.size
     px = img.load()
 
@@ -168,7 +172,7 @@ def _remove_light_background(img: Image.Image) -> Image.Image:
                 bg[ny][nx] = True
                 q.append((nx, ny))
 
-    alpha = Image.new('L', (w, h), 255)
+    alpha = Image.new("L", (w, h), 255)
     alpha_px = alpha.load()
     for y in range(h):
         for x in range(w):
@@ -256,11 +260,11 @@ def _accent_for_title(title: str, accent=None):
     title = (title or '').lower()
     if accent:
         return accent
-    if 'invite' in title or 'mute' in title or 'bloque' in title:
+    if 'convite' in title or 'mute' in title or 'bloqueado' in title:
         return (141, 98, 255)
     if 'desmute' in title:
         return (84, 198, 147)
-    if 'auto-reply' in title:
+    if 'resposta automática' in title:
         return (88, 154, 255)
     return LOG_IMAGE_ACCENT
 
@@ -332,7 +336,16 @@ def _paste_glow(canvas: Image.Image, box, color, blur=24, alpha=115, radius=28):
     return Image.alpha_composite(canvas, glow)
 
 
-async def _build_log_image(guild: discord.Guild, member=None, title: str = 'Log', channel_name: str = '', reason: str = '', action: str = '', message_text: str = '', accent=None) -> BytesIO:
+async def _build_log_image(
+    guild: discord.Guild,
+    member=None,
+    title: str = 'Log',
+    channel_name: str = '',
+    reason: str = '',
+    action: str = '',
+    message_text: str = '',
+    accent=None,
+) -> BytesIO:
     width, height = 1000, 820
     accent = _accent_for_title(title, accent)
 
@@ -469,15 +482,23 @@ async def log(guild: discord.Guild, member=None, title: str = 'Log', channel_nam
         if not canal and guild:
             canal = discord.utils.get(guild.text_channels, name='mod-logs')
         if canal:
+            perms = canal.permissions_for(guild.me or guild.get_member(bot.user.id)) if guild and bot.user else None
             try:
-                image_bytes = await _build_log_image(guild, member=member, title=title, channel_name=channel_name, reason=reason, action=action, message_text=message_text, accent=accent)
-                arquivo = discord.File(fp=image_bytes, filename='log.png')
-                await canal.send(file=arquivo)
+                if perms and perms.send_messages and perms.attach_files:
+                    image_bytes = await _build_log_image(guild, member=member, title=title, channel_name=channel_name, reason=reason, action=action, message_text=message_text, accent=accent)
+                    arquivo = discord.File(fp=image_bytes, filename='log.png')
+                    await canal.send(file=arquivo)
+                else:
+                    resumo = f"{title} | Nome: {(getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'} | Chat: {channel_name or 'sistema'} | Motivo: {reason} | Ação: {action} | Mensagem: {message_text}"
+                    await canal.send(resumo)
             except Exception as img_err:
                 print('[LOG WARN] Falha ao gerar/enviar log em imagem:', img_err)
                 traceback.print_exc()
-                resumo = f"{title} | Nome: {(getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'} | Chat: {channel_name or 'sistema'} | Motivo: {reason} | Ação: {action} | Mensagem: {message_text}"
-                await canal.send(resumo)
+                try:
+                    resumo = f"{title} | Nome: {(getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'} | Chat: {channel_name or 'sistema'} | Motivo: {reason} | Ação: {action} | Mensagem: {message_text}"
+                    await canal.send(resumo)
+                except Exception:
+                    print('[LOG FALLBACK] Não foi possível enviar resumo textual.')
         else:
             print('[LOG]', title, channel_name, reason, action, message_text)
     except Exception:
@@ -495,8 +516,6 @@ try:
         familias_db = db["familias"]
         print("[MONGO] Conectado ao MongoDB")
     else:
-        mongo = None
-        familias_db = None
         if not MongoClient:
             print("[MONGO] pymongo não instalado; usando fallback de arquivo")
         else:
@@ -506,12 +525,12 @@ except Exception as e:
     mongo = None
     familias_db = None
 
-# ==================== PERSISTÊNCIA (carregar/salvar) ====================
+# ==================== PERSISTÊNCIA ====================
 def carregar():
     try:
         if familias_db is not None:
             doc = familias_db.find_one({"_id": "familias"})
-            if doc and "data" in doc and isinstance(doc["data"], dict):
+            if doc and isinstance(doc.get("data"), dict):
                 return doc["data"]
             return {}
     except Exception as e:
@@ -533,7 +552,6 @@ def salvar(data):
     if not isinstance(data, dict):
         print("[SAVE ERROR] Dados a salvar não são um dict. Abortando.")
         return
-
     try:
         if familias_db is not None:
             familias_db.update_one({"_id": "familias"}, {"$set": {"data": data}}, upsert=True)
@@ -553,8 +571,7 @@ def salvar(data):
         try:
             with open(ARQUIVO, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
-        except Exception as e2:
-            print("[FILE ERROR] Falha final ao salvar arquivo:", e2)
+        except Exception:
             traceback.print_exc()
 
 
@@ -578,7 +595,7 @@ def salvar_autorizados(lista):
         print("[FILE ERROR] Falha ao salvar autorizados:", e)
         traceback.print_exc()
 
-# ==================== UTILITÁRIOS DE CARGO ====================
+# ==================== CARGOS ====================
 PERMS_FRIENDLY = {
     "Enviar links": "embed_links",
     "Enviar imagens/arquivos": "attach_files",
@@ -589,9 +606,21 @@ PERMS_FRIENDLY = {
     "Ler histórico de mensagens": "read_message_history",
     "Gerenciar mensagens": "manage_messages",
     "Mencionar everyone": "mention_everyone",
-    "Gerenciar cargos": "manage_roles"
+    "Gerenciar cargos": "manage_roles",
 }
 ALLOWED_PERMS = set(PERMS_FRIENDLY.values())
+
+
+def build_permissions_from_list(perms_list):
+    perms = discord.Permissions.none()
+    for name in perms_list:
+        n = name.strip().lower()
+        if n in ALLOWED_PERMS:
+            try:
+                setattr(perms, n, True)
+            except Exception:
+                pass
+    return perms
 
 
 async def setup_muted_role(guild: discord.Guild, role: discord.Role):
@@ -604,13 +633,12 @@ async def setup_muted_role(guild: discord.Guild, role: discord.Role):
                     add_reactions=False,
                     send_tts_messages=False,
                     attach_files=False,
-                    embed_links=False
+                    embed_links=False,
                 )
             elif isinstance(channel, discord.VoiceChannel):
                 await channel.set_permissions(role, speak=False, connect=False)
-        except Exception as e:
-            print(f"[MUTE SETUP WARN] Falha ao configurar canal {getattr(channel,'name',str(channel))}: {e}")
-            traceback.print_exc()
+        except Exception:
+            pass
 
 
 async def get_or_create_muted_role(guild: discord.Guild):
@@ -624,15 +652,14 @@ async def get_or_create_muted_role(guild: discord.Guild):
         embed_links=False,
         speak=False,
         connect=False,
-        mention_everyone=False
+        mention_everyone=False,
     )
 
     if role:
         try:
             await role.edit(permissions=perms)
-        except Exception as e:
-            print(f"[MUTE WARN] Não foi possível editar permissões do role Muted: {e}")
-            traceback.print_exc()
+        except Exception:
+            pass
         await setup_muted_role(guild, role)
         return role
 
@@ -650,80 +677,35 @@ async def get_or_create_muted_role(guild: discord.Guild):
         print(f"[MUTE OK] Role Muted criado: {role} (id={role.id})")
         await setup_muted_role(guild, role)
         return role
+    except discord.Forbidden:
+        print("[MUTE ERROR] Sem permissão para criar o role Muted (hierarquia ou Manage Roles).")
     except Exception as e:
-        print(f"[MUTE ERROR] Falha ao criar role Muted: {e}")
+        print("[MUTE ERROR] Falha ao criar role Muted:", e)
         traceback.print_exc()
-        return None
+    return None
 
 
-async def mute_member(guild: discord.Guild, member: discord.Member):
-    try:
-        if not guild or not member:
-            return False
-        role = await get_or_create_muted_role(guild)
-        if not role:
-            return False
-        if role in member.roles:
-            return True
-        try:
-            await member.add_roles(role, reason="Muted por envio de invite/propaganda")
-            info = f"🔇 {member.mention} ({member.id}) foi mutado por envio de invite/propaganda."
-            try:
-                await log(guild, member=member, title="Usuário mutado", channel_name="sistema", reason="Envio de invite/propaganda", action="Cargo Muted aplicado", message_text="sem mensagem disponível")
-            except Exception:
-                print("[MUTE LOG WARN] Falha ao logar mute no canal de logs.")
-            return True
-        except Exception as e:
-            print("[MUTE ERROR] Falha ao adicionar role Muted ao membro:", e)
-            traceback.print_exc()
-            return False
-    except Exception as e:
-        print("[MUTE ERROR] Erro inesperado em mute_member:", e)
-        traceback.print_exc()
-        return False
-
-
-async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int = None):
+async def safe_get_or_create_role(guild: discord.Guild, role_name: str, color_int: int | None = None):
     try:
         bot_member = guild.me or (guild.get_member(bot.user.id) if bot.user else None)
         if not bot_member or not bot_member.guild_permissions.manage_roles:
             print("[ROLE ERROR] Bot não tem Manage Roles no servidor.")
             return None
 
-        try:
-            role = discord.utils.get(guild.roles, name=role_name)
-            if role:
-                if color_int is not None:
-                    try:
-                        await role.edit(colour=discord.Colour(color_int))
-                    except Exception as e:
-                        print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
-                        traceback.print_exc()
-                print(f"[ROLE OK] Reutilizando role existente: {role.name} (id={role.id})")
-                return role
-        except Exception as e:
-            print("[ROLE ERROR] Erro ao procurar role existente:", e)
-            traceback.print_exc()
-
-        try:
+        role = discord.utils.get(guild.roles, name=role_name)
+        if role:
             if color_int is not None:
-                role = await guild.create_role(name=role_name, colour=discord.Colour(color_int), reason="Criado pelo sistema de famílias")
-            else:
-                role = await guild.create_role(name=role_name, reason="Criado pelo sistema de famílias")
-            print(f"[ROLE OK] Role criado: {role} (id={role.id})")
+                try:
+                    await role.edit(colour=discord.Colour(color_int))
+                except Exception:
+                    pass
             return role
-        except discord.Forbidden:
-            print("[ROLE ERROR] Forbidden: bot não pode criar/editar roles (hierarquia ou permissão).")
-        except discord.HTTPException as e:
-            print("[ROLE ERROR] HTTPException ao criar role:", e)
-            traceback.print_exc()
-        except Exception as e:
-            print("[ROLE ERROR] Erro inesperado ao criar role:", e)
-            traceback.print_exc()
-        return None
 
+        if color_int is not None:
+            return await guild.create_role(name=role_name, colour=discord.Colour(color_int), reason="Criado pelo sistema de famílias")
+        return await guild.create_role(name=role_name, reason="Criado pelo sistema de famílias")
     except Exception as e:
-        print("[ROLE ERROR] Erro inesperado em safe_get_or_create_role:", e)
+        print("[ROLE ERROR] Erro em safe_get_or_create_role:", e)
         traceback.print_exc()
         return None
 
@@ -734,33 +716,15 @@ async def aplicar_cargo_a_todos(guild: discord.Guild, role: discord.Role, membro
             membro = guild.get_member(int(m_id))
             if membro and role not in membro.roles:
                 await membro.add_roles(role)
-        except Exception as e:
-            print(f"[ROLE APPLY WARN] Falha ao aplicar role a {m_id}: {e}")
-            traceback.print_exc()
+        except Exception:
             pass
-
-
-def build_permissions_from_list(perms_list):
-    perms = discord.Permissions.none()
-    for name in perms_list:
-        n = name.strip().lower()
-        if n in ALLOWED_PERMS:
-            try:
-                setattr(perms, n, True)
-            except Exception:
-                pass
-    return perms
 
 
 async def aplicar_permissoes_ao_role(role: discord.Role, perms_list):
     try:
         perms = build_permissions_from_list(perms_list)
         await role.edit(permissions=perms)
-        print(f"[ROLE OK] Permissões aplicadas ao role {role.name}: {perms_list}")
-    except discord.Forbidden:
-        print("[ROLE ERROR] Forbidden: bot não pode editar permissões do role (hierarquia ou permissão).")
-    except Exception as e:
-        print("[ROLE ERROR] Erro ao aplicar permissões ao role:", e)
+    except Exception:
         traceback.print_exc()
 
 
@@ -772,85 +736,51 @@ async def atualizar_ou_criar_role_da_familia(dono_key: str):
 
     guild = bot.get_guild(SEU_ID_DO_SERVIDOR)
     if not guild:
-        print("[ROLE ERROR] Guild não encontrado com SEU_ID_DO_SERVIDOR.")
         return None
 
     nome_familia = familia.get("nome", "Minha Família")
     role_display_name = f"Família • {nome_familia}"
 
-    cor_value = familia.get("cor", None)
     color_int = None
+    cor_value = familia.get("cor")
     if isinstance(cor_value, str) and cor_value.startswith("#"):
         try:
             color_int = int(cor_value.replace("#", ""), 16)
-        except Exception as e:
-            print("[ROLE WARN] HEX inválido em familia['cor']:", e)
-            traceback.print_exc()
+        except Exception:
             color_int = None
 
     role = None
     role_id = familia.get("role_id")
     if role_id:
-        try:
-            role = guild.get_role(int(role_id))
-        except Exception as e:
-            print("[ROLE WARN] role_id salvo não encontrado no guild:", e)
-            traceback.print_exc()
-            role = None
+        role = guild.get_role(int(role_id))
 
     if role:
         try:
             if role.name != role_display_name:
                 await role.edit(name=role_display_name)
-        except Exception as e:
-            print("[ROLE WARN] Não foi possível renomear role existente:", e)
-            traceback.print_exc()
+        except Exception:
+            pass
         if color_int is not None:
             try:
                 await role.edit(colour=discord.Colour(color_int))
-            except Exception as e:
-                print("[ROLE WARN] Não foi possível editar cor do role existente:", e)
-                traceback.print_exc()
+            except Exception:
+                pass
     else:
-        try:
-            role = discord.utils.get(guild.roles, name=role_display_name)
-            if not role:
-                role = await safe_get_or_create_role(guild, role_display_name, color_int)
-            else:
-                if color_int is not None:
-                    try:
-                        await role.edit(colour=discord.Colour(color_int))
-                    except Exception as e:
-                        print("[ROLE WARN] Não foi possível editar cor do role encontrado por nome:", e)
-                        traceback.print_exc()
-        except Exception as e:
-            print("[ROLE ERROR] Erro ao obter/criar role:", e)
-            traceback.print_exc()
-            role = None
+        role = discord.utils.get(guild.roles, name=role_display_name)
+        if not role:
+            role = await safe_get_or_create_role(guild, role_display_name, color_int)
 
     if role:
         familia["role_id"] = role.id
         salvar(data)
-
         permissoes = familia.get("permissoes", [])
         if isinstance(permissoes, list) and permissoes:
-            try:
-                await aplicar_permissoes_ao_role(role, permissoes)
-            except Exception as e:
-                print("[ROLE WARN] Erro ao aplicar permissoes salvas:", e)
-                traceback.print_exc()
-
-        try:
-            await aplicar_cargo_a_todos(guild, role, familia.get("membros", []))
-        except Exception as e:
-            print("[ROLE WARN] Erro ao aplicar role a todos:", e)
-            traceback.print_exc()
+            await aplicar_permissoes_ao_role(role, permissoes)
+        await aplicar_cargo_a_todos(guild, role, familia.get("membros", []))
         return role
-
     return None
 
-# ==================== MUTES AUTOMÁTICOS (10 minutos) ==================
-MUTES_FILE = "active_mutes.json"
+# ==================== MUTES ====================
 _active_mutes = {}
 
 
@@ -862,9 +792,7 @@ def _load_mutes():
                 _active_mutes = json.load(f)
         else:
             _active_mutes = {}
-    except Exception as e:
-        print("[MUTE PERSIST WARN] Falha ao carregar mutes:", e)
-        traceback.print_exc()
+    except Exception:
         _active_mutes = {}
 
 
@@ -873,8 +801,7 @@ def _save_mutes():
         with open(MUTES_FILE + ".tmp", "w", encoding="utf-8") as f:
             json.dump(_active_mutes, f, indent=2)
         os.replace(MUTES_FILE + ".tmp", MUTES_FILE)
-    except Exception as e:
-        print("[MUTE PERSIST WARN] Falha ao salvar mutes:", e)
+    except Exception:
         traceback.print_exc()
 
 
@@ -900,15 +827,10 @@ async def _schedule_unmute(guild_id: int, member_id: int, delay_seconds: int):
         if role and member and role in member.roles:
             try:
                 await member.remove_roles(role, reason="Unmute automático (10 minutos expirados)")
-                try:
-                    await log(guild, member=member, title="Desmute automático", channel_name="sistema", reason="Tempo de 10 minutos expirou", action="Cargo Muted removido", message_text="sem mensagem disponível")
-                except Exception:
-                    pass
-            except Exception as e:
-                print("[SCHEDULE UNMUTE ERROR]", e)
-                traceback.print_exc()
-    except Exception as e:
-        print("[SCHEDULE UNMUTE ERROR]", e)
+                await log(guild, member=member, title="Desmute automático", channel_name="sistema", reason="Tempo de 10 minutos expirou", action="Cargo Muted removido", message_text="sem mensagem disponível")
+            except Exception:
+                pass
+    except Exception:
         traceback.print_exc()
 
 
@@ -921,43 +843,38 @@ async def mute_member_with_duration(guild: discord.Guild, member: discord.Member
         if not role:
             return False
 
+        bot_member = guild.me or (guild.get_member(bot.user.id) if bot.user else None)
+        if bot_member and bot_member.top_role <= role:
+            print("[MUTE ERROR] Cargo do bot está abaixo do cargo Muted.")
+            return False
+
         if role in member.roles:
             if seconds and seconds > 0:
                 guild_key = str(guild.id)
-                if guild_key not in _active_mutes:
-                    _active_mutes[guild_key] = {}
-                _active_mutes[guild_key][str(member.id)] = int(time.time()) + int(seconds)
+                _active_mutes.setdefault(guild_key, {})[str(member.id)] = int(time.time()) + int(seconds)
                 _save_mutes()
                 asyncio.create_task(_schedule_unmute(guild.id, member.id, int(seconds)))
             return True
 
-        try:
-            await member.add_roles(role, reason="Muted automático (invite) — 10 minutos")
-        except Exception as e:
-            print("[MUTE ERROR] Falha ao adicionar role Muted ao membro:", e)
-            traceback.print_exc()
-            return False
+        await member.add_roles(role, reason="Muted automático (invite) — 10 minutos")
 
         if seconds and seconds > 0:
             guild_key = str(guild.id)
-            if guild_key not in _active_mutes:
-                _active_mutes[guild_key] = {}
-            _active_mutes[guild_key][str(member.id)] = int(time.time()) + int(seconds)
+            _active_mutes.setdefault(guild_key, {})[str(member.id)] = int(time.time()) + int(seconds)
             _save_mutes()
             asyncio.create_task(_schedule_unmute(guild.id, member.id, int(seconds)))
 
-        try:
-            await log(guild, member=member, title="Mute automático", channel_name="sistema", reason="Envio de invite detectado", action="Mute de 10 minutos aplicado", message_text="sem mensagem disponível")
-        except Exception:
-            pass
-
+        await log(guild, member=member, title="Mute automático", channel_name="sistema", reason="Envio de convite detectado", action="Mute de 10 minutos aplicado", message_text="sem mensagem disponível")
         return True
+    except discord.Forbidden:
+        print("[MUTE ERROR] Sem permissão para adicionar o cargo Muted.")
+        return False
     except Exception as e:
         print("[MUTE ERROR] Erro inesperado em mute_member_with_duration:", e)
         traceback.print_exc()
         return False
 
-# ==================== UNMUTE MANUAL ====================
+
 async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
     try:
         if not guild or not member:
@@ -968,33 +885,16 @@ async def unmute_member(guild: discord.Guild, member: discord.Member) -> bool:
         if role not in member.roles:
             return True
 
-        try:
-            await member.remove_roles(role, reason="Unmuted pelo bot")
-        except Exception as e:
-            print("[UNMUTE ERROR] Falha ao remover role Muted do membro:", e)
-            traceback.print_exc()
-            return False
-
-        try:
-            guild_key = str(guild.id)
-            if guild_key in _active_mutes and str(member.id) in _active_mutes[guild_key]:
-                del _active_mutes[guild_key][str(member.id)]
-                if not _active_mutes[guild_key]:
-                    del _active_mutes[guild_key]
-                _save_mutes()
-        except Exception as e:
-            print("[UNMUTE WARN] Falha ao atualizar _active_mutes:", e)
-            traceback.print_exc()
-
-        try:
-            await log(guild, member=member, title="Desmute manual", channel_name="sistema", reason="Comando de moderação", action="Cargo Muted removido", message_text="sem mensagem disponível")
-        except Exception:
-            pass
-
+        await member.remove_roles(role, reason="Unmuted pelo bot")
+        guild_key = str(guild.id)
+        if guild_key in _active_mutes and str(member.id) in _active_mutes[guild_key]:
+            del _active_mutes[guild_key][str(member.id)]
+            if not _active_mutes[guild_key]:
+                del _active_mutes[guild_key]
+            _save_mutes()
+        await log(guild, member=member, title="Desmute manual", channel_name="sistema", reason="Comando de moderação", action="Cargo Muted removido", message_text="sem mensagem disponível")
         return True
-
-    except Exception as e:
-        print("[UNMUTE ERROR] Erro inesperado em unmute_member:", e)
+    except Exception:
         traceback.print_exc()
         return False
 
@@ -1011,21 +911,13 @@ async def cmd_unmute(ctx, membro: discord.Member = None):
     if muted_role and bot_member and bot_member.top_role <= muted_role:
         return await ctx.reply("❌ Não posso remover o mute: meu cargo está abaixo do cargo Muted.", mention_author=False)
 
-    try:
-        ok = await unmute_member(ctx.guild, membro)
-        if ok:
-            await ctx.reply(f"✅ {membro.mention} foi desmutado.", mention_author=False)
-        else:
-            await ctx.reply("⚠️ Não foi possível desmutar esse usuário (role Muted não encontrado ou erro).", mention_author=False)
-    except commands.MissingPermissions:
-        await ctx.reply("❌ Você não tem permissão para usar esse comando.", mention_author=False)
-    except Exception as e:
-        print("[CMD UNMUTE ERROR]", e)
-        traceback.print_exc()
-        await ctx.reply("❌ Ocorreu um erro ao tentar desmutar.", mention_author=False)
+    ok = await unmute_member(ctx.guild, membro)
+    if ok:
+        await ctx.reply(f"✅ {membro.mention} foi desmutado.", mention_author=False)
+    else:
+        await ctx.reply("⚠️ Não foi possível desmutar esse usuário.", mention_author=False)
 
-# ==================== REAÇÕES AUTOMÁTICAS (persistentes) ==================
-REACTIONS_FILE = "reactions_rules.json"
+# ==================== REAÇÕES ====================
 _reaction_rules = {}
 
 
@@ -1037,9 +929,7 @@ def _load_reaction_rules():
                 _reaction_rules = json.load(f)
         else:
             _reaction_rules = {}
-    except Exception as e:
-        print("[REACTIONS WARN] Falha ao carregar regras:", e)
-        traceback.print_exc()
+    except Exception:
         _reaction_rules = {}
 
 
@@ -1049,8 +939,7 @@ def _save_reaction_rules():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_reaction_rules, f, indent=2, ensure_ascii=False)
         os.replace(tmp, REACTIONS_FILE)
-    except Exception as e:
-        print("[REACTIONS WARN] Falha ao salvar regras:", e)
+    except Exception:
         traceback.print_exc()
 
 
@@ -1080,20 +969,11 @@ async def _try_add_reaction(message: discord.Message, emoji: str):
             pass
     return False
 
-# ==================== DEFAULT KEYWORD RULES (auto) ==================
+
 DEFAULT_KEYWORD_RULES = [
-    {
-        "keywords": ["bis", "bisdov", "bisdov3", "chefe"],
-        "emojis": ["<:FBI:1466776866122629252>"]
-    },
-    {
-        "keywords": ["theus", "matheus", "god", "matheuz", "matheuss", "matheuzinho"],
-        "emojis": ["<:suspect:1466766825361641634>"]
-    },
-    {
-        "keywords": ["lipe", "lipezinho", "lipezito"],
-        "emojis": ["<:808757471270404098:1466605544143061193>"]
-    }
+    {"keywords": ["bis", "bisdov", "bisdov3", "chefe"], "emojis": ["<:FBI:1466776866122629252>"]},
+    {"keywords": ["theus", "matheus", "god", "matheuz", "matheuss", "matheuzinho"], "emojis": ["<:suspect:1466766825361641634>"]},
+    {"keywords": ["lipe", "lipezinho", "lipezito"], "emojis": ["<:808757471270404098:1466605544143061193>"]},
 ]
 
 
@@ -1111,36 +991,20 @@ def _ensure_default_rules_for_all_guilds():
                         found = True
                         break
                 if not found:
-                    existing.append({
-                        "channel_id": 0,
-                        "keyword": kw,
-                        "is_regex": False,
-                        "emojis": rule["emojis"]
-                    })
+                    existing.append({"channel_id": 0, "keyword": kw, "is_regex": False, "emojis": rule["emojis"]})
         _reaction_rules[gk]["by_keyword"] = existing
     _save_reaction_rules()
 
-# ==================== HELPERS ====================
+# ==================== HELPERS / INTENTS ====================
 def _mentions_jeffu(message: discord.Message) -> bool:
-    """
-    Retorna True se a mensagem mencionar 'jeffu' por substring
-    ou se alguma das menções tiver name/display_name contendo 'jeffu'.
-    """
     try:
         content = (message.content or "").lower()
         if "jeffu" in content:
             return True
         for m in getattr(message, "mentions", []):
-            try:
-                name = ""
-                if hasattr(m, "display_name"):
-                    name = (m.display_name or m.name or "").lower()
-                else:
-                    name = (getattr(m, "name", "") or "").lower()
-                if "jeffu" in name:
-                    return True
-            except Exception:
-                continue
+            name = (getattr(m, "display_name", None) or getattr(m, "name", "") or "").lower()
+            if "jeffu" in name:
+                return True
     except Exception:
         pass
     return False
@@ -1182,7 +1046,6 @@ def short_greeting_type(text: str):
     return None
 
 
-# ==================== CONTEXTO + COOLDOWN ====================
 CHANNEL_CONTEXT = defaultdict(lambda: deque(maxlen=12))
 USER_CHANNEL_CONTEXT = defaultdict(lambda: deque(maxlen=8))
 LAST_INTENT_REPLY_TS = {}
@@ -1231,11 +1094,7 @@ def cooldown_status(message: discord.Message, intent: str):
     user_key = (_user_channel_key(message), intent)
     channel_wait = max(0, COOLDOWN_INTENT_SECONDS - int(now - LAST_INTENT_REPLY_TS.get(channel_key, 0)))
     user_wait = max(0, COOLDOWN_USER_INTENT_SECONDS - int(now - LAST_USER_INTENT_REPLY_TS.get(user_key, 0)))
-    return {
-        "blocked": channel_wait > 0 or user_wait > 0,
-        "channel_wait": channel_wait,
-        "user_wait": user_wait,
-    }
+    return {"blocked": channel_wait > 0 or user_wait > 0, "channel_wait": channel_wait, "user_wait": user_wait}
 
 
 def mark_cooldown(message: discord.Message, intent: str):
@@ -1244,7 +1103,6 @@ def mark_cooldown(message: discord.Message, intent: str):
     LAST_USER_INTENT_REPLY_TS[(_user_channel_key(message), intent)] = now
 
 
-# ==================== MOTOR DE INTENÇÃO ====================
 INTENT_RULES = {
     "site_status": {
         "reply": "🌐 Veja em <#1409296003034644542>",
@@ -1263,16 +1121,16 @@ INTENT_RULES = {
         "threshold": 5,
         "groups": [
             {"name": "assunto", "terms": ["login", "senha", "acesso", "conta", "ticket", "suporte", "entrar", "logar", "acessar"], "weight": 3, "required": True, "cap": 2},
-            {"name": "problema", "terms": ["nao consigo", "esqueci", "erro", "ajuda", "recuperar", "sem acesso", "problema", "abrir", "como", "falhou", "travou"], "weight": 3, "required": True, "cap": 2},
+            {"name": "problema", "terms": ["nao consigo", "não consigo", "esqueci", "erro", "ajuda", "recuperar", "sem acesso", "problema", "abrir", "como", "falhou", "travou", "nao entra", "não entra"], "weight": 3, "required": True, "cap": 2},
         ],
-        "followup_terms": ["continua", "ainda", "deu ruim", "nao foi", "nao resolveu", "nao deu", "continua igual"],
+        "followup_terms": ["continua", "ainda", "deu ruim", "nao foi", "não foi", "nao resolveu", "não resolveu", "nao deu", "não deu", "continua igual"],
         "negatives": ["minha senha e forte", "gostei da senha", "troquei minha senha e pronto"],
         "context_boost_user": 5,
         "context_boost_channel": 2,
     },
     "obra_suggestion": {
         "reply": "📚 Sugestões de obras é em <#1466087941506990171>",
-        "threshold": 6,
+        "threshold": 5,
         "groups": [
             {"name": "midia", "terms": ["obra", "obras", "manga", "manhwa", "novel", "titulo", "titulos"], "weight": 2, "required": True, "cap": 2},
             {"name": "intencao", "terms": ["sugestao", "sugestoes", "indicar", "indicacao", "recomendar", "recomendacao"], "weight": 4, "required": True, "cap": 2},
@@ -1298,9 +1156,20 @@ INTENT_RULES = {
 
 GREETING_REPLIES = {
     "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
-    "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! Já se hidratou hoje? <:FBI:1466776866122629252>",
-    "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <:amem:1466774899686117426>",
+    "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
+    "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
 }
+
+
+def humanize_intent(intent: str) -> str:
+    mapping = {
+        'greeting': 'saudação',
+        'support': 'suporte',
+        'site_status': 'status do site',
+        'obra_suggestion': 'sugestão de obra',
+        'missing_chapters': 'capítulos faltando',
+    }
+    return mapping.get(intent, intent.replace('_', ' '))
 
 
 def score_intent(normalized_text: str, intent_name: str, rule: dict, context: dict):
@@ -1310,14 +1179,7 @@ def score_intent(normalized_text: str, intent_name: str, rule: dict, context: di
 
     for negative in rule.get("negatives", []):
         if contains_term(normalized_text, negative):
-            return {
-                "intent": intent_name,
-                "score": -999,
-                "matched_groups": {},
-                "missing_required": [],
-                "context_used": None,
-                "negative_hit": negative,
-            }
+            return {"intent": intent_name, "score": -999, "matched_groups": {}, "missing_required": [], "context_used": None, "negative_hit": negative}
 
     for group in rule.get("groups", []):
         matches = find_matches(normalized_text, group.get("terms", []))
@@ -1325,10 +1187,7 @@ def score_intent(normalized_text: str, intent_name: str, rule: dict, context: di
             capped_len = min(len(matches), int(group.get("cap", len(matches))))
             group_score = capped_len * int(group.get("weight", 1))
             score += group_score
-            matched_groups[group["name"]] = {
-                "matches": matches,
-                "score": group_score,
-            }
+            matched_groups[group["name"]] = {"matches": matches, "score": group_score}
         elif group.get("required"):
             missing_required.append(group["name"])
 
@@ -1342,30 +1201,17 @@ def score_intent(normalized_text: str, intent_name: str, rule: dict, context: di
 
     if user_same_intent and followup_matches:
         score += int(rule.get("context_boost_user", 0))
-        matched_groups["contexto_usuario_canal"] = {
-            "matches": followup_matches,
-            "score": int(rule.get("context_boost_user", 0)),
-        }
+        matched_groups["contexto_usuario_canal"] = {"matches": followup_matches, "score": int(rule.get("context_boost_user", 0))}
         context_used = "user_channel"
     elif channel_same_intent and followup_matches:
         score += int(rule.get("context_boost_channel", 0))
-        matched_groups["contexto_canal"] = {
-            "matches": followup_matches,
-            "score": int(rule.get("context_boost_channel", 0)),
-        }
+        matched_groups["contexto_canal"] = {"matches": followup_matches, "score": int(rule.get("context_boost_channel", 0))}
         context_used = "channel"
 
     if missing_required and context_used is None:
         score -= 2 * len(missing_required)
 
-    return {
-        "intent": intent_name,
-        "score": score,
-        "matched_groups": matched_groups,
-        "missing_required": missing_required,
-        "context_used": context_used,
-        "negative_hit": None,
-    }
+    return {"intent": intent_name, "score": score, "matched_groups": matched_groups, "missing_required": missing_required, "context_used": context_used, "negative_hit": None}
 
 
 def detect_auto_reply(message: discord.Message):
@@ -1405,17 +1251,6 @@ def detect_auto_reply(message: discord.Message):
     return best
 
 
-def humanize_intent(intent: str) -> str:
-    mapping = {
-        'greeting': 'saudação',
-        'support': 'suporte',
-        'site_status': 'status do site',
-        'obra_suggestion': 'sugestão de obra',
-        'missing_chapters': 'capítulos faltando',
-    }
-    return mapping.get(intent, intent.replace('_', ' '))
-
-
 def explain_reason(result: dict) -> str:
     parts = [f"intent={result['intent']}", f"score={result['score']}/{result.get('threshold', '?')}"]
     if result.get("context_used"):
@@ -1424,7 +1259,6 @@ def explain_reason(result: dict) -> str:
         parts.append(f"faltando={','.join(result['missing_required'])}")
     if result.get("negative_hit"):
         parts.append(f"negativo={result['negative_hit']}")
-
     groups_desc = []
     for group_name, data in result.get("matched_groups", {}).items():
         groups_desc.append(f"{group_name}: {', '.join(data.get('matches', []))} (+{data.get('score', 0)})")
@@ -1432,19 +1266,74 @@ def explain_reason(result: dict) -> str:
         parts.append("grupos=[" + " | ".join(groups_desc) + "]")
     return " ; ".join(parts)
 
-# ==================== EVENTOS E MODERAÇÃO (ÚNICO on_message) ====================
-INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
+# ==================== PERMISSÕES / MODERAÇÃO ====================
+def get_bot_member(guild: discord.Guild):
+    try:
+        return guild.me or (guild.get_member(bot.user.id) if bot.user else None)
+    except Exception:
+        return None
 
-BAD_WORDS_PATTERN = re.compile(
-    r"\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?",
-    re.IGNORECASE
-)
+
+def channel_perm_snapshot(message: discord.Message):
+    bot_member = get_bot_member(message.guild) if message.guild else None
+    if not message.guild or not bot_member:
+        return {"manage_messages": False, "manage_roles": False, "send_messages": False, "attach_files": False, "read_message_history": False}
+    perms = message.channel.permissions_for(bot_member)
+    return {
+        "manage_messages": perms.manage_messages,
+        "manage_roles": bot_member.guild_permissions.manage_roles,
+        "send_messages": perms.send_messages,
+        "attach_files": perms.attach_files,
+        "read_message_history": perms.read_message_history,
+    }
 
 
+def build_missing_perms_reason(snapshot: dict) -> str:
+    missing = []
+    if not snapshot.get("manage_messages"):
+        missing.append("Gerenciar Mensagens")
+    if not snapshot.get("manage_roles"):
+        missing.append("Gerenciar Cargos")
+    if not snapshot.get("send_messages"):
+        missing.append("Enviar Mensagens")
+    if not snapshot.get("attach_files"):
+        missing.append("Anexar Arquivos")
+    if not missing:
+        return "sem permissões ausentes"
+    return "Permissões ausentes: " + ", ".join(missing)
+
+
+async def try_delete_message(message: discord.Message) -> tuple[bool, str]:
+    if not message.guild:
+        return False, "mensagem fora de servidor"
+    snapshot = channel_perm_snapshot(message)
+    if not snapshot.get("manage_messages"):
+        return False, "sem permissão Gerenciar Mensagens"
+    try:
+        await message.delete()
+        return True, "mensagem removida"
+    except discord.Forbidden:
+        return False, "discord retornou Missing Permissions ao apagar"
+    except Exception as e:
+        return False, f"falha ao apagar: {e}"
+
+
+async def audit_permission_status(guild: discord.Guild):
+    bot_member = get_bot_member(guild)
+    if not guild or not bot_member:
+        return
+    missing = []
+    if not bot_member.guild_permissions.manage_roles:
+        missing.append("Gerenciar Cargos")
+    if not bot_member.guild_permissions.manage_messages:
+        missing.append("Gerenciar Mensagens")
+    if missing:
+        print("[PERMS WARN] Bot sem permissões globais importantes:", ", ".join(missing))
+
+# ==================== EVENTOS ====================
 @bot.event
 async def on_message(message: discord.Message):
     try:
-        # ignora bots e webhooks
         if message.author.bot:
             return
         if getattr(message, "webhook_id", None) is not None:
@@ -1452,7 +1341,7 @@ async def on_message(message: discord.Message):
         if not message.content and message.embeds:
             return
 
-        # aplicar regras por palavra (prioritário)
+        # reações automáticas
         try:
             guild = message.guild
             if guild:
@@ -1485,30 +1374,38 @@ async def on_message(message: discord.Message):
 
         texto = (message.content or "").strip()
 
-        # BLOQUEIO DE INVITES (10m automático)
+        # bloqueio de convites com tolerância a falta de permissão
         if message.guild and INVITE_REGEX.search(texto):
-            if message.guild and (message.author.guild_permissions.administrator or message.author.id == DONO_ID):
+            if message.author.guild_permissions.administrator or message.author.id == DONO_ID:
                 await bot.process_commands(message)
                 return
-            try:
-                await message.delete()
-            except Exception as e:
-                print("[BLOQUEIO WARN] Erro ao deletar mensagem com invite:", e)
-                traceback.print_exc()
-            try:
-                if message.guild:
-                    membro = message.guild.get_member(message.author.id)
-                    if membro:
-                        ok = await mute_member_with_duration(message.guild, membro, seconds=600)
-                        if not ok:
-                            print("[MOD WARN] Não foi possível aplicar mute automático.")
-                    await log(message.guild, member=message.author, title="Convite bloqueado", channel_name=getattr(message.channel, "name", "desconhecido"), reason="Convite detectado na mensagem", action="Mensagem removida e mute de 10 minutos aplicado", message_text=(message.content or "sem mensagem"))
-            except Exception as e:
-                print("[BLOQUEIO WARN] Erro ao processar invite:", e)
-                traceback.print_exc()
+
+            delete_ok, delete_note = await try_delete_message(message)
+            mute_ok = False
+            mute_note = ""
+            if message.guild:
+                membro = message.guild.get_member(message.author.id)
+                if membro:
+                    mute_ok = await mute_member_with_duration(message.guild, membro, seconds=600)
+                    mute_note = "mute de 10 minutos aplicado" if mute_ok else "não foi possível aplicar mute"
+                else:
+                    mute_note = "membro não encontrado"
+
+            action_parts = []
+            action_parts.append("mensagem removida" if delete_ok else f"mensagem não removida ({delete_note})")
+            action_parts.append(mute_note)
+            await log(
+                message.guild,
+                member=message.author,
+                title="Convite bloqueado",
+                channel_name=getattr(message.channel, "name", "desconhecido"),
+                reason=build_missing_perms_reason(channel_perm_snapshot(message)) if (not delete_ok or not mute_ok) else "Convite detectado na mensagem",
+                action="; ".join([p for p in action_parts if p]),
+                message_text=(message.content or "sem mensagem"),
+            )
             return
 
-        # RESPOSTAS AUTOMÁTICAS COM PONTUAÇÃO + CONTEXTO + COOLDOWN + LOGS
+        # respostas automáticas contextuais
         result = detect_auto_reply(message)
         if result:
             cd = cooldown_status(message, result["intent"])
@@ -1519,7 +1416,15 @@ async def on_message(message: discord.Message):
                 if cd["user_wait"] > 0:
                     why_blocked.append(f"cooldown_usuario={cd['user_wait']}s")
                 if message.guild:
-                    await log(message.guild, member=message.author, title="Resposta automática bloqueada", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Cooldown ativo: {' ; '.join(why_blocked)}", action=f"Resposta da intenção {humanize_intent(result['intent'])} não foi enviada", message_text=(message.content or "sem mensagem"))
+                    await log(
+                        message.guild,
+                        member=message.author,
+                        title="Resposta automática bloqueada",
+                        channel_name=getattr(message.channel, "name", "desconhecido"),
+                        reason=f"Cooldown ativo: {' ; '.join(why_blocked)}",
+                        action=f"Resposta da intenção {humanize_intent(result['intent'])} não foi enviada",
+                        message_text=(message.content or "sem mensagem"),
+                    )
             else:
                 remember_context(message, result["intent"], result["score"], result["matched_groups"], result["reply"])
                 mark_cooldown(message, result["intent"])
@@ -1529,39 +1434,41 @@ async def on_message(message: discord.Message):
                     print("[AUTO-REPLY WARN] Falha ao enviar resposta automática:", e)
                     traceback.print_exc()
                 if message.guild:
-                    await log(message.guild, member=message.author, title="Resposta automática enviada", channel_name=getattr(message.channel, "name", "desconhecido"), reason=f"Intenção detectada: {humanize_intent(result['intent'])}", action="Resposta automática enviada com sucesso", message_text=(message.content or "sem mensagem"))
+                    await log(
+                        message.guild,
+                        member=message.author,
+                        title="Resposta automática enviada",
+                        channel_name=getattr(message.channel, "name", "desconhecido"),
+                        reason=f"Intenção detectada: {humanize_intent(result['intent'])}",
+                        action="Resposta automática enviada com sucesso",
+                        message_text=(message.content or "sem mensagem"),
+                    )
                 return
 
-        # Interações dirigidas ao bot (DM ou menção)
         is_dm = isinstance(message.channel, discord.DMChannel)
         mentions_bot = bot.user in message.mentions if bot.user else False
         should_respond_personal = is_dm or mentions_bot
 
         if should_respond_personal:
-            # agradecimentos e "te amo" exigem menção/substring 'jeffu'
             if re.search(r"(agradecido|obg|obrigado)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("Não há de que <:amem:1466774899686117426>", mention_author=False)
                 return
-
             if re.search(r"(te amo|amo vc|amo você|amo voce)", texto, re.IGNORECASE) and _mentions_jeffu(message):
                 await message.reply("💙 Obrigado... <:shame:1466777359586693376>", mention_author=False)
                 return
-
             if BAD_WORDS_PATTERN.search(texto):
                 try:
                     await message.reply("<:looking:1466793665463844894> Me deixa trabalhar, poxa...", mention_author=False)
-                except Exception as e:
-                    print("[REPLY WARN] Falha ao responder a mensagem:", e)
+                except Exception:
+                    pass
                 return
 
-        # processa comandos normalmente (sempre)
         await bot.process_commands(message)
-
     except Exception as e:
         print(f"Erro no on_message: {e}")
         traceback.print_exc()
 
-# ==================== STARTUP / TOKEN ====================
+
 @bot.event
 async def on_ready():
     print(f"[BOT] Logado como {bot.user} (id: {bot.user.id})")
@@ -1571,7 +1478,12 @@ async def on_ready():
         print("[DEFAULT RULES WARN] Falha ao garantir regras padrão:", e)
         traceback.print_exc()
 
-    # re-agenda mutes carregados do arquivo
+    try:
+        for guild in bot.guilds:
+            await audit_permission_status(guild)
+    except Exception:
+        traceback.print_exc()
+
     try:
         now = int(time.time())
         for guild_key, members in list(_active_mutes.items()):
@@ -1602,7 +1514,6 @@ async def on_ready():
         print("[MUTE RELOAD WARN]", e)
         traceback.print_exc()
 
-# Carrega token do ambiente e inicia
 TOKEN = os.getenv("DISCORD_TOKEN")
 if TOKEN:
     bot.run(TOKEN)
