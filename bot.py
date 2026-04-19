@@ -1299,7 +1299,7 @@ INTENT_RULES = {
 GREETING_REPLIES = {
     "bom dia": "Bom diia! <:shame:1466765431137370379> como foi sua noite? Dormiu bem?",
     "boa tarde": "Boa tarde! Espero que esteja tendo um bom dia! <:amem:1466774899686117426> Já se hidratou hoje? <:FBI:1466776866122629252>",
-    "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>",
+    "boa noite": "Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <:shame:1466777359586693376>",
 }
 
 
