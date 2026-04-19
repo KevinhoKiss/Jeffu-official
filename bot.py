@@ -284,8 +284,8 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     width, height = 1000, 820
     accent = _accent_for_title(title, accent)
     badge_font = _get_font(42, True)
-    hero_font = _get_font(100, True)
-    sub_font = _get_font(100, False)
+    hero_font = _get_font(400, True)
+    sub_font = _get_font(400, False)
     body_font = _get_font(100, False)
     label_font = _get_font(44, True)
     small_font = _get_font(46, False)
