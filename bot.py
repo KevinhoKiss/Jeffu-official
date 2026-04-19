@@ -42,8 +42,8 @@ AUTORIZADOS_FILE = "autorizados.json"
 REACTIONS_FILE = "reactions_rules.json"
 MUTES_FILE = "active_mutes.json"
 
-COOLDOWN_INTENT_SECONDS = 10
-COOLDOWN_USER_INTENT_SECONDS = 10
+COOLDOWN_INTENT_SECONDS = 45
+COOLDOWN_USER_INTENT_SECONDS = 25
 CONTEXT_MAX_AGE_SECONDS = 180
 
 INVITE_REGEX = re.compile(r"(discord(?:\.gg|\.com\/invite|app\.com\/invite)\/[A-Za-z0-9\-]+)", re.IGNORECASE)
@@ -58,9 +58,9 @@ LOG_IMAGE_BG_TOP = (14, 14, 18)
 LOG_IMAGE_CARD = (22, 22, 28)
 LOG_IMAGE_CARD_2 = (30, 30, 38)
 LOG_IMAGE_CARD_BORDER = (58, 58, 70)
-LOG_IMAGE_TEXT = (300, 300, 300)
-LOG_IMAGE_MUTED = (300, 300, 300)
-LOG_IMAGE_ACCENT = (290, 192, 255)
+LOG_IMAGE_TEXT = (342, 344, 348)
+LOG_IMAGE_MUTED = (368, 372, 382)
+LOG_IMAGE_ACCENT = (224, 192, 355)
 LOG_IMAGE_PILL = (37, 37, 48)
 LOG_IMAGE_SHADOW = (0, 0, 0, 135)
 LOG_IMAGE_LINE = (74, 74, 92)
@@ -1277,11 +1277,12 @@ def get_bot_member(guild: discord.Guild):
 def channel_perm_snapshot(message: discord.Message):
     bot_member = get_bot_member(message.guild) if message.guild else None
     if not message.guild or not bot_member:
-        return {"manage_messages": False, "manage_roles": False, "send_messages": False, "attach_files": False, "read_message_history": False}
+        return {"manage_messages": False, "manage_roles": False, "ban_members": False, "send_messages": False, "attach_files": False, "read_message_history": False}
     perms = message.channel.permissions_for(bot_member)
     return {
         "manage_messages": perms.manage_messages,
         "manage_roles": bot_member.guild_permissions.manage_roles,
+        "ban_members": bot_member.guild_permissions.ban_members,
         "send_messages": perms.send_messages,
         "attach_files": perms.attach_files,
         "read_message_history": perms.read_message_history,
@@ -1294,6 +1295,8 @@ def build_missing_perms_reason(snapshot: dict) -> str:
         missing.append("Gerenciar Mensagens")
     if not snapshot.get("manage_roles"):
         missing.append("Gerenciar Cargos")
+    if not snapshot.get("ban_members"):
+        missing.append("Banir Membros")
     if not snapshot.get("send_messages"):
         missing.append("Enviar Mensagens")
     if not snapshot.get("attach_files"):
@@ -1318,6 +1321,38 @@ async def try_delete_message(message: discord.Message) -> tuple[bool, str]:
         return False, f"falha ao apagar: {e}"
 
 
+async def try_ban_member(guild: discord.Guild, member: discord.Member, reason: str = "Ban automático") -> tuple[bool, str]:
+    if not guild or not member:
+        return False, "guild ou membro inválido"
+
+    bot_member = get_bot_member(guild)
+    if not bot_member:
+        return False, "bot não encontrado no servidor"
+
+    if not bot_member.guild_permissions.ban_members:
+        return False, "sem permissão Banir Membros"
+
+    try:
+        if member == guild.owner:
+            return False, "não posso banir o dono do servidor"
+    except Exception:
+        pass
+
+    try:
+        if bot_member.top_role <= member.top_role:
+            return False, "hierarquia insuficiente para banir"
+    except Exception:
+        pass
+
+    try:
+        await member.ban(reason=reason)
+        return True, "usuário banido"
+    except discord.Forbidden:
+        return False, "discord retornou Missing Permissions ao banir"
+    except Exception as e:
+        return False, f"falha ao banir: {e}"
+
+
 async def audit_permission_status(guild: discord.Guild):
     bot_member = get_bot_member(guild)
     if not guild or not bot_member:
@@ -1327,6 +1362,8 @@ async def audit_permission_status(guild: discord.Guild):
         missing.append("Gerenciar Cargos")
     if not bot_member.guild_permissions.manage_messages:
         missing.append("Gerenciar Mensagens")
+    if not bot_member.guild_permissions.ban_members:
+        missing.append("Banir Membros")
     if missing:
         print("[PERMS WARN] Bot sem permissões globais importantes:", ", ".join(missing))
 
@@ -1381,25 +1418,24 @@ async def on_message(message: discord.Message):
                 return
 
             delete_ok, delete_note = await try_delete_message(message)
-            mute_ok = False
-            mute_note = ""
+            ban_ok = False
+            ban_note = ""
             if message.guild:
                 membro = message.guild.get_member(message.author.id)
                 if membro:
-                    mute_ok = await mute_member_with_duration(message.guild, membro, seconds=600)
-                    mute_note = "mute de 10 minutos aplicado" if mute_ok else "não foi possível aplicar mute"
+                    ban_ok, ban_note = await try_ban_member(message.guild, membro, reason="Ban automático por envio de convite")
                 else:
-                    mute_note = "membro não encontrado"
+                    ban_note = "membro não encontrado"
 
             action_parts = []
             action_parts.append("mensagem removida" if delete_ok else f"mensagem não removida ({delete_note})")
-            action_parts.append(mute_note)
+            action_parts.append(ban_note if ban_note else ("usuário banido" if ban_ok else "ban não aplicado"))
             await log(
                 message.guild,
                 member=message.author,
                 title="Convite bloqueado",
                 channel_name=getattr(message.channel, "name", "desconhecido"),
-                reason=build_missing_perms_reason(channel_perm_snapshot(message)) if (not delete_ok or not mute_ok) else "Convite detectado na mensagem",
+                reason=build_missing_perms_reason(channel_perm_snapshot(message)) if (not delete_ok or not ban_ok) else "Convite detectado na mensagem",
                 action="; ".join([p for p in action_parts if p]),
                 message_text=(message.content or "sem mensagem"),
             )
