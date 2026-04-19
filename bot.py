@@ -4,8 +4,8 @@ import os, re, json, time, asyncio, traceback, unicodedata
 from collections import defaultdict, deque
 from io import BytesIO
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from zoneinfo import ZoneInfo
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 try:
     from pymongo import MongoClient
@@ -51,6 +51,20 @@ LOG_IMAGE_LINE = (74, 74, 92)
 LOG_IMAGE_BLUE = (51, 118, 255)
 CHARACTER_ASSET_FILES = ('decor_character.png', '1ONXu.jpg')
 _character_asset_cache = None
+
+# Tamanhos de fonte (fácil de alterar)
+LOG_BADGE_FONT_SIZE = 22
+LOG_TITLE_FONT_SIZE = 52
+LOG_SUBTITLE_FONT_SIZE = 30
+LOG_BODY_FONT_SIZE = 28
+LOG_LABEL_FONT_SIZE = 24
+LOG_SMALL_FONT_SIZE = 16
+LOG_LINE_HEIGHT = 36
+LOG_LABEL_WIDTH = 145
+
+
+def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).strftime(fmt)
 
 
 def _font_paths(bold=False):
@@ -123,19 +137,25 @@ def _remove_light_background(img):
     img = img.convert('RGBA')
     w, h = img.size
     px = img.load()
+
     def is_light_bg(x, y):
         r, g, b, a = px[x, y]
         bright = (int(r) + int(g) + int(b)) / 3
         spread = max(r, g, b) - min(r, g, b)
         return bright >= 180 and spread <= 35
+
     bg = [[False for _ in range(w)] for _ in range(h)]
     q = deque()
     for x in range(w):
-        if is_light_bg(x, 0): q.append((x, 0)); bg[0][x] = True
-        if is_light_bg(x, h - 1) and not bg[h - 1][x]: q.append((x, h - 1)); bg[h - 1][x] = True
+        if is_light_bg(x, 0):
+            q.append((x, 0)); bg[0][x] = True
+        if is_light_bg(x, h - 1) and not bg[h - 1][x]:
+            q.append((x, h - 1)); bg[h - 1][x] = True
     for y in range(h):
-        if is_light_bg(0, y) and not bg[y][0]: q.append((0, y)); bg[y][0] = True
-        if is_light_bg(w - 1, y) and not bg[y][w - 1]: q.append((w - 1, y)); bg[y][w - 1] = True
+        if is_light_bg(0, y) and not bg[y][0]:
+            q.append((0, y)); bg[y][0] = True
+        if is_light_bg(w - 1, y) and not bg[y][w - 1]:
+            q.append((w - 1, y)); bg[y][w - 1] = True
     while q:
         x, y = q.popleft()
         for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
@@ -284,15 +304,15 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
     width, height = 1180, 940
     accent = _accent_for_title(title, accent)
-    badge_font = _get_font(22, True)
-    hero_font = _get_font(52, True)
-    sub_font = _get_font(30, False)
-    body_font = _get_font(28, False)
-    label_font = _get_font(24, True)
-    small_font = _get_font(16, False)
+    badge_font = _get_font(LOG_BADGE_FONT_SIZE, True)
+    hero_font = _get_font(LOG_TITLE_FONT_SIZE, True)
+    sub_font = _get_font(LOG_SUBTITLE_FONT_SIZE, False)
+    body_font = _get_font(LOG_BODY_FONT_SIZE, False)
+    label_font = _get_font(LOG_LABEL_FONT_SIZE, True)
+    small_font = _get_font(LOG_SMALL_FONT_SIZE, False)
     name_text = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
     lines = [('Nome', name_text), ('Chat', channel_name or 'sistema'), ('Motivo', reason or 'não informado'), ('Ação', action or 'não informada'), ('Mensagem', message_text or 'sem mensagem')]
-    card_w = 860
+    card_w = 980
     card_x = (width - card_w) // 2
     card_y = 96
     avatar_size = 170
@@ -302,17 +322,17 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     dummy = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     dummy_draw = ImageDraw.Draw(dummy)
     details_x1, details_x2 = card_x + 34, card_x + card_w - 34
-    body_max_w = details_x2 - details_x1 - 220
+    body_max_w = details_x2 - details_x1 - 300
     rendered = []
     for label, value in lines:
         wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w) or ['']
         rendered.append((label, wrapped[:3 if label == 'Mensagem' else 2]))
-    line_h = 36
+    line_h = LOG_LINE_HEIGHT
     detail_rows = sum(len(v) for _, v in rendered)
     details_y1 = sub_top + 72
     content_h = 80 + detail_rows * line_h + 28
     details_y2 = details_y1 + content_h
-    card_h = max(520, (details_y2 - card_y) + 40)
+    card_h = max(560, (details_y2 - card_y) + 40)
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
     canvas = canvas.convert('RGBA')
@@ -357,7 +377,7 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
     draw.text((details_x1 + 20, details_y1 + 16), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
     draw.line((details_x1 + 20, details_y1 + 52, details_x2 - 20, details_y1 + 52), fill=LOG_IMAGE_LINE, width=1)
-    label_w = 145
+    label_w = LOG_LABEL_WIDTH
     y = details_y1 + 72
     for label, parts in rendered:
         draw.text((details_x1 + 20, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
@@ -366,19 +386,12 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
             draw.text((details_x1 + 20 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
             inner_y += line_h
         y = inner_y + 4
-    
-def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
-    return datetime.now(ZoneInfo("America/Sao_Paulo")).strftime(fmt)
-
-stamp = _agora_brasil_str('%d/%m/%Y %H:%M')
-draw.text((card_x + card_w - 150, card_y + card_h - 22), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
-
-bio = BytesIO()
-canvas.convert('RGB').save(bio, format='PNG')
-bio.seek(0)
-return bio
-``
-    
+    stamp = _agora_brasil_str('%d/%m/%Y %H:%M')
+    draw.text((card_x + card_w - 180, card_y + card_h - 24), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
+    bio = BytesIO()
+    canvas.convert('RGB').save(bio, format='PNG')
+    bio.seek(0)
+    return bio
 
 
 async def log(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=LOG_IMAGE_ACCENT):
@@ -403,7 +416,7 @@ async def log(guild, member=None, title='Log', channel_name='', reason='', actio
     except Exception:
         traceback.print_exc()
 
-# ==================== DADOS / PERSISTÊNCIA SIMPLES ====================
+# ==================== DADOS / PERSISTÊNCIA ====================
 def carregar_autorizados():
     if not os.path.exists(AUTORIZADOS_FILE):
         return []
@@ -421,7 +434,6 @@ def salvar_autorizados(lista):
     except Exception:
         traceback.print_exc()
 
-# Mongo opcional só para manter compatibilidade
 mongo = None
 familias_db = None
 try:
@@ -438,6 +450,7 @@ except Exception as e:
 
 # ==================== REAÇÕES ====================
 _reaction_rules = {}
+
 
 def _load_reaction_rules():
     global _reaction_rules
@@ -664,7 +677,8 @@ def detect_auto_reply(message):
         scored = score_intent(text, intent_name, rule, context)
         scored['reply'] = rule['reply']; scored['threshold'] = rule['threshold']; candidates.append(scored)
     candidates = [c for c in candidates if c['score'] > -999]
-    if not candidates: return None
+    if not candidates:
+        return None
     best = max(candidates, key=lambda x: x['score'])
     return best if best['score'] >= best['threshold'] else None
 
