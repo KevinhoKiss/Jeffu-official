@@ -13,7 +13,6 @@ try:
 except Exception:
     MongoClient = None
 
-# ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
 LOG_CHANNEL_ID = 1495200091974271209
 DONO_ID = 766709835701682208
@@ -37,7 +36,6 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ==================== LOG VISUAL ====================
 LOG_IMAGE_BG = (6, 6, 8)
 LOG_IMAGE_BG_TOP = (14, 14, 18)
 LOG_IMAGE_CARD = (22, 22, 28)
@@ -53,7 +51,6 @@ LOG_IMAGE_BLUE = (51, 118, 255)
 CHARACTER_ASSET_FILES = ('decor_character.png', '1ONXu.jpg')
 _character_asset_cache = None
 
-# Tamanhos de fonte (fácil de alterar)
 LOG_BADGE_FONT_SIZE = 26
 LOG_TITLE_FONT_SIZE = 58
 LOG_SUBTITLE_FONT_SIZE = 36
@@ -71,22 +68,29 @@ def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
 def _font_paths(bold=False):
     base = Path(__file__).resolve().parent
     return [
-        str(base / 'fonts' / ('NotoSans-Bold.ttf' if bold else 'NotoSans-Regular.ttf')),
-        str(base / ('NotoSans-Bold.ttf' if bold else 'NotoSans-Regular.ttf')),
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-        '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+        base / 'fonts' / ('NotoSans-Bold.ttf' if bold else 'NotoSans-Regular.ttf'),
+        base / ('NotoSans-Bold.ttf' if bold else 'NotoSans-Regular.ttf'),
+        Path('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'),
+        Path('/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf'),
     ]
 
 
 def _get_font(size: int, bold: bool = False):
+    tried = []
     for path in _font_paths(bold):
-        if os.path.exists(path):
+        tried.append(str(path))
+        if path.exists():
             try:
-                return ImageFont.truetype(path, size)
+                font = ImageFont.truetype(str(path), size)
+                print(f'[FONT OK] Fonte carregada: {path} | size={size} | bold={bold}')
+                return font
             except Exception as e:
-                print(f'[FONT WARN] Falha ao carregar fonte {path}: {e}')
-    print(f'[FONT WARN] Nenhuma fonte encontrada. Usando fallback padrão. tamanho pedido={size}')
-    return ImageFont.load_default()
+                print(f'[FONT FAIL] Erro ao carregar {path}: {e}')
+    raise FileNotFoundError(
+        'Nenhuma fonte TTF válida encontrada para o log.\n'
+        f'Tentativas: {tried}\n'
+        'Coloque as fontes em: ./fonts/NotoSans-Regular.ttf e ./fonts/NotoSans-Bold.ttf'
+    )
 
 
 def _text_width(draw, text, font):
@@ -142,25 +146,19 @@ def _remove_light_background(img):
     img = img.convert('RGBA')
     w, h = img.size
     px = img.load()
-
     def is_light_bg(x, y):
         r, g, b, a = px[x, y]
         bright = (int(r) + int(g) + int(b)) / 3
         spread = max(r, g, b) - min(r, g, b)
         return bright >= 180 and spread <= 35
-
     bg = [[False for _ in range(w)] for _ in range(h)]
     q = deque()
     for x in range(w):
-        if is_light_bg(x, 0):
-            q.append((x, 0)); bg[0][x] = True
-        if is_light_bg(x, h - 1) and not bg[h - 1][x]:
-            q.append((x, h - 1)); bg[h - 1][x] = True
+        if is_light_bg(x, 0): q.append((x, 0)); bg[0][x] = True
+        if is_light_bg(x, h - 1) and not bg[h - 1][x]: q.append((x, h - 1)); bg[h - 1][x] = True
     for y in range(h):
-        if is_light_bg(0, y) and not bg[y][0]:
-            q.append((0, y)); bg[y][0] = True
-        if is_light_bg(w - 1, y) and not bg[y][w - 1]:
-            q.append((w - 1, y)); bg[y][w - 1] = True
+        if is_light_bg(0, y) and not bg[y][0]: q.append((0, y)); bg[y][0] = True
+        if is_light_bg(w - 1, y) and not bg[y][w - 1]: q.append((w - 1, y)); bg[y][w - 1] = True
     while q:
         x, y = q.popleft()
         for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
@@ -171,8 +169,7 @@ def _remove_light_background(img):
     alpha_px = alpha.load()
     for y in range(h):
         for x in range(w):
-            if bg[y][x]:
-                alpha_px[x, y] = 0
+            if bg[y][x]: alpha_px[x, y] = 0
     alpha = alpha.filter(ImageFilter.GaussianBlur(1.2))
     img.putalpha(alpha)
     bbox = img.getbbox()
@@ -195,8 +192,7 @@ def _load_bottom_character():
         if chosen.lower().endswith('.png'):
             img = img.convert('RGBA')
             bbox = img.getbbox()
-            if bbox:
-                img = img.crop(bbox)
+            if bbox: img = img.crop(bbox)
         else:
             img = _remove_light_background(img)
         _character_asset_cache = img.convert('RGBA')
@@ -207,26 +203,19 @@ def _load_bottom_character():
 
 
 async def _avatar_bytes(member):
-    if not member:
-        return None
-    try:
-        return await member.display_avatar.with_size(256).read()
-    except Exception:
-        return None
+    if not member: return None
+    try: return await member.display_avatar.with_size(256).read()
+    except Exception: return None
 
 
 async def _guild_icon_bytes(guild):
-    if not guild or not getattr(guild, 'icon', None):
-        return None
-    try:
-        return await guild.icon.with_size(128).read()
-    except Exception:
-        return None
+    if not guild or not getattr(guild, 'icon', None): return None
+    try: return await guild.icon.with_size(128).read()
+    except Exception: return None
 
 
 def _initials_from_member(member):
-    if not member:
-        return '?'
+    if not member: return '?'
     name = getattr(member, 'display_name', None) or getattr(member, 'name', None) or str(member)
     parts = [p for p in str(name).split() if p]
     return (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else (str(name)[:2].upper() if name else '?')
@@ -236,8 +225,7 @@ def _draw_centered_pill(draw, cx, y, text, font, fill, text_fill, h_padding=24, 
     tw, th = _text_size(draw, text, font)
     pill_w = tw + h_padding * 2
     pill_h = th + v_padding * 2
-    if max_width and pill_w > max_width:
-        pill_w = max_width
+    if max_width and pill_w > max_width: pill_w = max_width
     x1 = int(cx - pill_w / 2)
     x2 = int(cx + pill_w / 2)
     draw.rounded_rectangle((x1, y, x2, y + pill_h), radius=radius, fill=fill)
@@ -248,12 +236,9 @@ def _draw_centered_pill(draw, cx, y, text, font, fill, text_fill, h_padding=24, 
 
 def _accent_for_title(title, accent=None):
     title = (title or '').lower()
-    if accent:
-        return accent
-    if 'ban' in title or 'convite' in title or 'bloqueado' in title:
-        return (190, 72, 72)
-    if 'resposta automática' in title:
-        return (88, 154, 255)
+    if accent: return accent
+    if 'ban' in title or 'convite' in title or 'bloqueado' in title: return (190, 72, 72)
+    if 'resposta automática' in title: return (88, 154, 255)
     return LOG_IMAGE_ACCENT
 
 
@@ -266,8 +251,7 @@ def _draw_vertical_gradient(canvas, top_color, bottom_color):
     for y in range(h):
         t = y / max(1, h - 1)
         c = (int(tr + (br - tr) * t), int(tg + (bg - tg) * t), int(tb + (bb - tb) * t))
-        for x in range(w):
-            px[x, y] = c
+        for x in range(w): px[x, y] = c
     return base
 
 
@@ -307,7 +291,6 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
 
 
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
-    # Tamanho moderado para Discord não reduzir tanto o preview
     width, height = 1000, 800
     accent = _accent_for_title(title, accent)
     badge_font = _get_font(LOG_BADGE_FONT_SIZE, True)
@@ -405,10 +388,8 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
 async def log(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=LOG_IMAGE_ACCENT):
     try:
         canal = None
-        if guild and LOG_CHANNEL_ID:
-            canal = guild.get_channel(LOG_CHANNEL_ID)
-        if not canal and guild:
-            canal = discord.utils.get(guild.text_channels, name='mod-logs')
+        if guild and LOG_CHANNEL_ID: canal = guild.get_channel(LOG_CHANNEL_ID)
+        if not canal and guild: canal = discord.utils.get(guild.text_channels, name='mod-logs')
         if canal:
             perms = canal.permissions_for(guild.me or guild.get_member(bot.user.id)) if guild and bot.user else None
             try:
@@ -424,21 +405,18 @@ async def log(guild, member=None, title='Log', channel_name='', reason='', actio
     except Exception:
         traceback.print_exc()
 
-# ==================== DADOS / PERSISTÊNCIA ====================
+
 def carregar_autorizados():
-    if not os.path.exists(AUTORIZADOS_FILE):
-        return []
+    if not os.path.exists(AUTORIZADOS_FILE): return []
     try:
-        with open(AUTORIZADOS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        with open(AUTORIZADOS_FILE, 'r', encoding='utf-8') as f: return json.load(f)
     except Exception:
         traceback.print_exc(); return []
 
 
 def salvar_autorizados(lista):
     try:
-        with open(AUTORIZADOS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(lista, f, indent=2, ensure_ascii=False)
+        with open(AUTORIZADOS_FILE, 'w', encoding='utf-8') as f: json.dump(lista, f, indent=2, ensure_ascii=False)
     except Exception:
         traceback.print_exc()
 
@@ -456,7 +434,6 @@ except Exception as e:
     mongo = None
     familias_db = None
 
-# ==================== REAÇÕES ====================
 _reaction_rules = {}
 
 
@@ -464,8 +441,7 @@ def _load_reaction_rules():
     global _reaction_rules
     try:
         if os.path.exists(REACTIONS_FILE):
-            with open(REACTIONS_FILE, 'r', encoding='utf-8') as f:
-                _reaction_rules = json.load(f)
+            with open(REACTIONS_FILE, 'r', encoding='utf-8') as f: _reaction_rules = json.load(f)
         else:
             _reaction_rules = {}
     except Exception:
@@ -474,8 +450,7 @@ def _load_reaction_rules():
 
 def _save_reaction_rules():
     try:
-        with open(REACTIONS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(_reaction_rules, f, indent=2, ensure_ascii=False)
+        with open(REACTIONS_FILE, 'w', encoding='utf-8') as f: json.dump(_reaction_rules, f, indent=2, ensure_ascii=False)
     except Exception:
         traceback.print_exc()
 
@@ -488,8 +463,7 @@ def _ensure_default_rules_for_all_guilds():
     ]
     for guild in bot.guilds:
         gk = str(guild.id)
-        if gk not in _reaction_rules:
-            _reaction_rules[gk] = {"by_keyword": []}
+        if gk not in _reaction_rules: _reaction_rules[gk] = {"by_keyword": []}
         existing = _reaction_rules[gk].get('by_keyword', [])
         for rule in default_rules:
             for kw in rule['keywords']:
@@ -513,16 +487,14 @@ async def _try_add_reaction(message, emoji):
             pass
     return False
 
-# ==================== AUTO-REPLY ====================
+
 def _mentions_jeffu(message):
     try:
         content = (message.content or '').lower()
-        if 'jeffu' in content:
-            return True
+        if 'jeffu' in content: return True
         for m in getattr(message, 'mentions', []):
             name = (getattr(m, 'display_name', None) or getattr(m, 'name', '') or '').lower()
-            if 'jeffu' in name:
-                return True
+            if 'jeffu' in name: return True
     except Exception:
         pass
     return False
@@ -542,13 +514,11 @@ def normalize_text(text):
 def contains_term(text, term):
     text = normalize_text(text)
     term = normalize_text(term)
-    if not term:
-        return False
+    if not term: return False
     return re.search(rf'(?<!\w){re.escape(term)}(?!\w)', text) is not None
 
 
-def find_matches(text, terms):
-    return [term for term in terms if contains_term(text, term)]
+def find_matches(text, terms): return [term for term in terms if contains_term(text, term)]
 
 
 def short_greeting_type(text):
@@ -559,8 +529,7 @@ def short_greeting_type(text):
         'boa noite': ['boa noite', 'boa noite gente', 'boa noite pessoal'],
     }
     for label, variants in greetings.items():
-        if text in variants:
-            return label
+        if text in variants: return label
     return None
 
 CHANNEL_CONTEXT = defaultdict(lambda: deque(maxlen=12))
@@ -674,8 +643,7 @@ def score_intent(normalized_text, intent_name, rule, context):
 def detect_auto_reply(message):
     raw_text = message.content or ''
     text = normalize_text(raw_text)
-    if not text:
-        return None
+    if not text: return None
     greeting = short_greeting_type(text)
     if greeting:
         return {'intent': 'greeting', 'reply': GREETING_REPLIES[greeting], 'score': 999, 'matched_groups': {'greeting': {'matches': [greeting], 'score': 999}}, 'context_used': None, 'threshold': 1, 'negative_hit': None, 'missing_required': []}
@@ -685,17 +653,14 @@ def detect_auto_reply(message):
         scored = score_intent(text, intent_name, rule, context)
         scored['reply'] = rule['reply']; scored['threshold'] = rule['threshold']; candidates.append(scored)
     candidates = [c for c in candidates if c['score'] > -999]
-    if not candidates:
-        return None
+    if not candidates: return None
     best = max(candidates, key=lambda x: x['score'])
     return best if best['score'] >= best['threshold'] else None
 
-# ==================== MODERAÇÃO ====================
+
 def get_bot_member(guild):
-    try:
-        return guild.me or (guild.get_member(bot.user.id) if bot.user else None)
-    except Exception:
-        return None
+    try: return guild.me or (guild.get_member(bot.user.id) if bot.user else None)
+    except Exception: return None
 
 
 def channel_perm_snapshot(message):
@@ -724,14 +689,11 @@ def build_missing_perms_reason(snapshot):
 
 
 async def try_delete_message(message):
-    if not message.guild:
-        return False, 'mensagem fora de servidor'
+    if not message.guild: return False, 'mensagem fora de servidor'
     snapshot = channel_perm_snapshot(message)
-    if not snapshot.get('manage_messages'):
-        return False, 'sem permissão Gerenciar Mensagens'
+    if not snapshot.get('manage_messages'): return False, 'sem permissão Gerenciar Mensagens'
     try:
-        await message.delete()
-        return True, 'mensagem removida'
+        await message.delete(); return True, 'mensagem removida'
     except discord.Forbidden:
         return False, 'discord retornou Missing Permissions ao apagar'
     except Exception as e:
@@ -739,14 +701,11 @@ async def try_delete_message(message):
 
 
 async def try_send_dm_warning(member, message_text, channel_name, reason):
-    if not member:
-        return False, 'membro inválido'
-    if not AVISAR_POR_DM_ANTES_DO_BAN:
-        return False, 'aviso por DM desativado'
+    if not member: return False, 'membro inválido'
+    if not AVISAR_POR_DM_ANTES_DO_BAN: return False, 'aviso por DM desativado'
     dm_content = f"{MENSAGEM_DM_BAN}\n\nCanal: {channel_name or 'desconhecido'}\nMotivo: {reason}\nMensagem: {message_text or 'sem mensagem'}"
     try:
-        await member.send(dm_content)
-        return True, 'aviso por DM enviado'
+        await member.send(dm_content); return True, 'aviso por DM enviado'
     except discord.Forbidden:
         return False, 'DM fechada ou bloqueada'
     except Exception as e:
@@ -754,26 +713,20 @@ async def try_send_dm_warning(member, message_text, channel_name, reason):
 
 
 async def try_ban_member(guild, member, reason='Ban automático'):
-    if not guild or not member:
-        return False, 'guild ou membro inválido'
+    if not guild or not member: return False, 'guild ou membro inválido'
     bot_member = get_bot_member(guild)
-    if not bot_member:
-        return False, 'bot não encontrado no servidor'
-    if not bot_member.guild_permissions.ban_members:
-        return False, 'sem permissão Banir Membros'
+    if not bot_member: return False, 'bot não encontrado no servidor'
+    if not bot_member.guild_permissions.ban_members: return False, 'sem permissão Banir Membros'
     try:
-        if member == guild.owner:
-            return False, 'não posso banir o dono do servidor'
+        if member == guild.owner: return False, 'não posso banir o dono do servidor'
     except Exception:
         pass
     try:
-        if bot_member.top_role <= member.top_role:
-            return False, 'hierarquia insuficiente para banir'
+        if bot_member.top_role <= member.top_role: return False, 'hierarquia insuficiente para banir'
     except Exception:
         pass
     try:
-        await member.ban(reason=reason)
-        return True, 'usuário banido'
+        await member.ban(reason=reason); return True, 'usuário banido'
     except discord.Forbidden:
         return False, 'discord retornou Missing Permissions ao banir'
     except Exception as e:
@@ -782,26 +735,20 @@ async def try_ban_member(guild, member, reason='Ban automático'):
 
 async def audit_permission_status(guild):
     bot_member = get_bot_member(guild)
-    if not guild or not bot_member:
-        return
+    if not guild or not bot_member: return
     missing = []
     if not bot_member.guild_permissions.manage_messages: missing.append('Gerenciar Mensagens')
     if not bot_member.guild_permissions.ban_members: missing.append('Banir Membros')
-    if missing:
-        print('[PERMS WARN] Bot sem permissões globais importantes:', ', '.join(missing))
+    if missing: print('[PERMS WARN] Bot sem permissões globais importantes:', ', '.join(missing))
 
-# ==================== EVENTOS ====================
+
 @bot.event
 async def on_message(message):
     try:
-        if message.author.bot:
-            return
-        if getattr(message, 'webhook_id', None) is not None:
-            return
-        if not message.content and message.embeds:
-            return
+        if message.author.bot: return
+        if getattr(message, 'webhook_id', None) is not None: return
+        if not message.content and message.embeds: return
 
-        # reações automáticas
         try:
             guild = message.guild
             if guild:
@@ -810,22 +757,18 @@ async def on_message(message):
                 for kw in rules.get('by_keyword', []):
                     try:
                         ch_id = int(kw.get('channel_id', 0))
-                        if ch_id != 0 and ch_id != message.channel.id:
-                            continue
+                        if ch_id != 0 and ch_id != message.channel.id: continue
                         content = (message.content or '')
-                        if not content:
-                            continue
+                        if not content: continue
                         if kw.get('is_regex'):
                             try:
                                 if re.search(kw.get('keyword', ''), content, re.IGNORECASE):
-                                    for em in kw.get('emojis', []):
-                                        await _try_add_reaction(message, em)
+                                    for em in kw.get('emojis', []): await _try_add_reaction(message, em)
                             except re.error:
                                 print('[REACTIONS WARN] Regex inválida para regra:', kw.get('keyword'))
                         else:
                             if kw.get('keyword', '').lower() in content.lower():
-                                for em in kw.get('emojis', []):
-                                    await _try_add_reaction(message, em)
+                                for em in kw.get('emojis', []): await _try_add_reaction(message, em)
                     except Exception:
                         pass
         except Exception as e:
@@ -833,8 +776,6 @@ async def on_message(message):
             traceback.print_exc()
 
         texto = (message.content or '').strip()
-
-        # BAN automático por convite com DM antes e log específico de ban
         if message.guild and BAN_AO_DETECTAR_CONVITE and INVITE_REGEX.search(texto):
             if message.author.guild_permissions.administrator or message.author.id == DONO_ID:
                 await bot.process_commands(message)
@@ -847,24 +788,15 @@ async def on_message(message):
                 dm_ok, dm_note = await try_send_dm_warning(member_obj, message.content or 'sem mensagem', getattr(message.channel, 'name', 'desconhecido'), 'Envio de convite/propaganda detectado')
                 ban_ok, ban_note = await try_ban_member(message.guild, member_obj, reason='Ban automático por envio de convite')
             else:
-                dm_note = 'membro não encontrado'
-                ban_note = 'membro não encontrado'
-            action_parts = []
-            action_parts.append('mensagem removida' if delete_ok else f'mensagem não removida ({delete_note})')
-            action_parts.append(dm_note if dm_note else ('aviso por DM enviado' if dm_ok else 'DM não enviada'))
-            action_parts.append(ban_note if ban_note else ('usuário banido' if ban_ok else 'ban não aplicado'))
-            await log(
-                message.guild,
-                member=message.author,
-                title='Ban automático',
-                channel_name=getattr(message.channel, 'name', 'desconhecido'),
-                reason=build_missing_perms_reason(channel_perm_snapshot(message)) if (not delete_ok or not ban_ok) else 'Convite detectado na mensagem',
-                action='; '.join([p for p in action_parts if p]),
-                message_text=(message.content or 'sem mensagem'),
-            )
+                dm_note = 'membro não encontrado'; ban_note = 'membro não encontrado'
+            action_parts = [
+                'mensagem removida' if delete_ok else f'mensagem não removida ({delete_note})',
+                dm_note if dm_note else ('aviso por DM enviado' if dm_ok else 'DM não enviada'),
+                ban_note if ban_note else ('usuário banido' if ban_ok else 'ban não aplicado')
+            ]
+            await log(message.guild, member=message.author, title='Ban automático', channel_name=getattr(message.channel, 'name', 'desconhecido'), reason=build_missing_perms_reason(channel_perm_snapshot(message)) if (not delete_ok or not ban_ok) else 'Convite detectado na mensagem', action='; '.join([p for p in action_parts if p]), message_text=(message.content or 'sem mensagem'))
             return
 
-        # respostas automáticas contextuais
         result = detect_auto_reply(message)
         if result:
             cd = cooldown_status(message, result['intent'])
@@ -912,14 +844,12 @@ async def on_message(message):
 async def on_ready():
     print(f'[BOT] Logado como {bot.user} (id: {bot.user.id})')
     try:
-        _load_reaction_rules()
-        _ensure_default_rules_for_all_guilds()
+        _load_reaction_rules(); _ensure_default_rules_for_all_guilds()
     except Exception as e:
         print('[DEFAULT RULES WARN] Falha ao garantir regras padrão:', e)
         traceback.print_exc()
     try:
-        for guild in bot.guilds:
-            await audit_permission_status(guild)
+        for guild in bot.guilds: await audit_permission_status(guild)
     except Exception:
         traceback.print_exc()
 
