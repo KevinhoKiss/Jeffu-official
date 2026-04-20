@@ -53,14 +53,14 @@ CHARACTER_ASSET_FILES = ('decor_character.png', '1ONXu.jpg')
 _character_asset_cache = None
 
 # Tamanhos de fonte (fácil de alterar)
-LOG_BADGE_FONT_SIZE = 42
+LOG_BADGE_FONT_SIZE = 28
 LOG_TITLE_FONT_SIZE = 72
-LOG_SUBTITLE_FONT_SIZE = 50
-LOG_BODY_FONT_SIZE = 94
-LOG_LABEL_FONT_SIZE = 94
-LOG_SMALL_FONT_SIZE = 94
-LOG_LINE_HEIGHT = 26
-LOG_LABEL_WIDTH = 100
+LOG_SUBTITLE_FONT_SIZE = 42
+LOG_BODY_FONT_SIZE = 40
+LOG_LABEL_FONT_SIZE = 34
+LOG_SMALL_FONT_SIZE = 22
+LOG_LINE_HEIGHT = 52
+LOG_LABEL_WIDTH = 220
 
 
 def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
@@ -302,7 +302,7 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
 
 
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
-    width, height = 1180, 940
+    width, height = 1280, 980
     accent = _accent_for_title(title, accent)
     badge_font = _get_font(LOG_BADGE_FONT_SIZE, True)
     hero_font = _get_font(LOG_TITLE_FONT_SIZE, True)
@@ -312,7 +312,7 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     small_font = _get_font(LOG_SMALL_FONT_SIZE, False)
     name_text = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
     lines = [('Nome', name_text), ('Chat', channel_name or 'sistema'), ('Motivo', reason or 'não informado'), ('Ação', action or 'não informada'), ('Mensagem', message_text or 'sem mensagem')]
-    card_w = 980
+    card_w = 1040
     card_x = (width - card_w) // 2
     card_y = 96
     avatar_size = 170
@@ -322,17 +322,17 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     dummy = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     dummy_draw = ImageDraw.Draw(dummy)
     details_x1, details_x2 = card_x + 34, card_x + card_w - 34
-    body_max_w = details_x2 - details_x1 - 300
+    body_max_w = details_x2 - details_x1 - 340
     rendered = []
     for label, value in lines:
         wrapped = _wrap_text(dummy_draw, value, body_font, body_max_w) or ['']
         rendered.append((label, wrapped[:3 if label == 'Mensagem' else 2]))
     line_h = LOG_LINE_HEIGHT
     detail_rows = sum(len(v) for _, v in rendered)
-    details_y1 = sub_top + 72
-    content_h = 80 + detail_rows * line_h + 28
+    details_y1 = sub_top + 88
+    content_h = 96 + detail_rows * line_h + 32
     details_y2 = details_y1 + content_h
-    card_h = max(560, (details_y2 - card_y) + 40)
+    card_h = max(640, (details_y2 - card_y) + 52)
     canvas = Image.new('RGB', (width, height), LOG_IMAGE_BG)
     _draw_background(canvas)
     canvas = canvas.convert('RGBA')
@@ -347,15 +347,15 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     draw.rounded_rectangle((card_x + 8, card_y + 8, card_x + card_w - 8, card_y + card_h - 8), radius=34, outline=LOG_IMAGE_LINE, width=1)
     draw.ellipse((card_x + card_w - 126, card_y - 4, card_x + card_w - 34, card_y + 46), fill=accent)
     badge_text = (guild.name if guild else 'Discord')[:18]
-    badge_w = max(180, min(300, int(len(badge_text) * 13) + 90))
+    badge_w = max(180, min(320, int(len(badge_text) * 15) + 100))
     badge_x, badge_y = card_x + 22, card_y + 18
-    draw.rounded_rectangle((badge_x, badge_y, badge_x + badge_w, badge_y + 64), radius=18, fill=LOG_IMAGE_PILL)
+    draw.rounded_rectangle((badge_x, badge_y, badge_x + badge_w, badge_y + 72), radius=18, fill=LOG_IMAGE_PILL)
     icon_raw = await _guild_icon_bytes(guild)
     if icon_raw:
-        icon_img = _crop_circle(Image.open(BytesIO(icon_raw)), 36)
-        canvas.paste(icon_img, (badge_x + 12, badge_y + 11), icon_img)
-    draw.text((badge_x + 56, badge_y + 10), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
-    draw.text((badge_x + 56, badge_y + 30), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
+        icon_img = _crop_circle(Image.open(BytesIO(icon_raw)), 40)
+        canvas.paste(icon_img, (badge_x + 12, badge_y + 15), icon_img)
+    draw.text((badge_x + 60, badge_y + 10), 'Discord', font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((badge_x + 60, badge_y + 36), badge_text, font=badge_font, fill=LOG_IMAGE_TEXT)
     avatar_cx = card_x + card_w // 2
     avatar_ring_box = (avatar_cx - avatar_size // 2 - 10, avatar_y - 10, avatar_cx + avatar_size // 2 + 10, avatar_y + avatar_size + 10)
     canvas = _paste_glow(canvas, avatar_ring_box, accent, blur=18, alpha=70, radius=999)
@@ -372,22 +372,22 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
         tw, th = _text_size(av_draw, initials, f)
         av_draw.text(((avatar_size - tw) / 2, (avatar_size - th) / 2 - 2), initials, font=f, fill=(255, 255, 255))
     canvas.paste(avatar_img, (avatar_cx - avatar_size // 2, avatar_y), avatar_img)
-    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Evento registrado', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=36, v_padding=12, radius=24, max_width=card_w - 140)
-    _draw_centered_pill(draw, avatar_cx, sub_top, name_text[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=26, v_padding=10, radius=18, max_width=card_w - 160)
+    _draw_centered_pill(draw, avatar_cx, pill_top, title or 'Evento registrado', hero_font, LOG_IMAGE_PILL, LOG_IMAGE_TEXT, h_padding=46, v_padding=16, radius=24, max_width=card_w - 140)
+    _draw_centered_pill(draw, avatar_cx, sub_top, name_text[:44], sub_font, (48, 48, 60), LOG_IMAGE_MUTED, h_padding=30, v_padding=12, radius=18, max_width=card_w - 160)
     draw.rounded_rectangle((details_x1, details_y1, details_x2, details_y2), radius=24, fill=LOG_IMAGE_CARD_2)
-    draw.text((details_x1 + 20, details_y1 + 16), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
-    draw.line((details_x1 + 20, details_y1 + 52, details_x2 - 20, details_y1 + 52), fill=LOG_IMAGE_LINE, width=1)
+    draw.text((details_x1 + 24, details_y1 + 18), 'Resumo do evento', font=label_font, fill=LOG_IMAGE_MUTED)
+    draw.line((details_x1 + 24, details_y1 + 64, details_x2 - 24, details_y1 + 64), fill=LOG_IMAGE_LINE, width=1)
     label_w = LOG_LABEL_WIDTH
-    y = details_y1 + 72
+    y = details_y1 + 88
     for label, parts in rendered:
-        draw.text((details_x1 + 20, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
+        draw.text((details_x1 + 24, y), f'{label}:', font=label_font, fill=LOG_IMAGE_MUTED)
         inner_y = y
         for seg in parts:
-            draw.text((details_x1 + 20 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
+            draw.text((details_x1 + 24 + label_w, inner_y), seg, font=body_font, fill=LOG_IMAGE_TEXT)
             inner_y += line_h
-        y = inner_y + 4
+        y = inner_y + 8
     stamp = _agora_brasil_str('%d/%m/%Y %H:%M')
-    draw.text((card_x + card_w - 180, card_y + card_h - 24), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
+    draw.text((card_x + card_w - 190, card_y + card_h - 28), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
     bio = BytesIO()
     canvas.convert('RGB').save(bio, format='PNG')
     bio.seek(0)
