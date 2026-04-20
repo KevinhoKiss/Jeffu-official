@@ -189,17 +189,22 @@ def _remove_light_background(img):
 
 def _load_bottom_character():
     global _character_asset_cache
+
     if _character_asset_cache is not None:
         return _character_asset_cache.copy()
+
     chosen = None
     for filename in CHARACTER_ASSET_FILES:
         if os.path.exists(filename):
             chosen = filename
             break
+
     if not chosen:
         return None
+
     try:
         img = Image.open(chosen)
+
         if chosen.lower().endswith('.png'):
             img = img.convert('RGBA')
             bbox = img.getbbox()
@@ -207,8 +212,10 @@ def _load_bottom_character():
                 img = img.crop(bbox)
         else:
             img = _remove_light_background(img)
+
         _character_asset_cache = img.convert('RGBA')
         return _character_asset_cache.copy()
+
     except Exception:
         traceback.print_exc()
         return None
@@ -284,26 +291,14 @@ def _draw_background(canvas):
     bg = _draw_vertical_gradient(canvas, LOG_IMAGE_BG_TOP, LOG_IMAGE_BG)
     canvas.paste(bg, (0, 0))
     draw = ImageDraw.Draw(canvas)
+
     draw.ellipse((-180, -120, 360, 280), fill=(12, 12, 18))
     draw.ellipse((w - 380, -150, w + 60, 250), fill=(10, 10, 16))
     draw.ellipse((w - 260, h - 210, w + 80, h + 30), fill=(12, 12, 18))
+
     draw.rectangle((0, h - 78, w, h), fill=(12, 12, 16))
     draw.rectangle((0, h - 18, w, h), fill=(44, 28, 139))
     draw.line((0, h - 78, w, h - 78), fill=LOG_IMAGE_BLUE, width=2)
-    character = _load_bottom_character()
-    if character is not None:
-        target_h = 190
-        scale = target_h / max(1, character.height)
-        target_w = max(1, int(character.width * scale))
-        character = character.resize((target_w, target_h), Image.LANCZOS)
-        shadow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
-        shadow_draw = ImageDraw.Draw(shadow)
-        shadow_draw.ellipse((16, h - 82, 16 + min(target_w, 150), h - 44), fill=(0, 0, 0, 90))
-        shadow = shadow.filter(ImageFilter.GaussianBlur(10))
-        canvas_rgba = canvas.convert('RGBA')
-        canvas_rgba = Image.alpha_composite(canvas_rgba, shadow)
-        canvas_rgba.paste(character, (14, h - 78 - target_h + 8), character)
-        canvas.paste(canvas_rgba.convert('RGB'))
 
 
 def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
@@ -312,6 +307,41 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
     gd.rounded_rectangle(box, radius=radius, fill=(*color, alpha))
     glow = glow.filter(ImageFilter.GaussianBlur(blur))
     return Image.alpha_composite(canvas, glow)
+
+def _paste_bottom_character_overlay(canvas):
+    character = _load_bottom_character()
+    if character is None:
+        return canvas
+
+    if character.mode != 'RGBA':
+        character = character.convert('RGBA')
+
+    w, h = canvas.size
+
+    # tamanho menor
+    target_h = 95
+    scale = target_h / max(1, character.height)
+    target_w = max(1, int(character.width * scale))
+    character = character.resize((target_w, target_h), Image.LANCZOS)
+
+    # posição no canto esquerdo inferior
+    x = -8
+    y = h - 78 - target_h + 18
+
+    # sombra suave
+    shadow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(shadow)
+    shadow_draw.ellipse(
+        (x + 6, h - 58, x + min(target_w, 90), h - 36),
+        fill=(0, 0, 0, 70)
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(8))
+
+    canvas_rgba = canvas.convert('RGBA')
+    canvas_rgba = Image.alpha_composite(canvas_rgba, shadow)
+    canvas_rgba.paste(character, (x, y), character)
+
+    return canvas_rgba
 
 
 # ==================== CONTEXTO / AUTO-REPLY ====================
@@ -855,8 +885,11 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
             inner_y += line_h
         y = inner_y + 6
 
-    stamp = _agora_brasil_str('%d/%m/%Y %H:%M')
+stamp = _agora_brasil_str('%d/%m/%Y %H:%M')
     draw.text((card_x + card_w - 165, card_y + card_h - 24), stamp, font=small_font, fill=LOG_IMAGE_MUTED)
+
+    # personagem por cima do card
+    canvas = _paste_bottom_character_overlay(canvas)
 
     bio = BytesIO()
     canvas.convert('RGB').save(bio, format='PNG')
