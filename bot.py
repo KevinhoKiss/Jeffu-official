@@ -36,8 +36,8 @@ async def log(guild, member=None, title='Log', channel_name='', reason='', actio
         traceback.print_exc()
 
 
-from familias_slash_v2 import setup_family_slash_system_v2
-setup_family_slash_system_v2(bot, DONO_ID, SEU_ID_DO_SERVIDOR, log)
+from familias_slash_v3 import setup_family_slash_system_v3
+setup_family_slash_system_v3(bot, DONO_ID, SEU_ID_DO_SERVIDOR, log)
 
 
 @bot.event
