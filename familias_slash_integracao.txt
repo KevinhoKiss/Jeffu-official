@@ -1,0 +1,2 @@
+from familias_slash_pronto import setup_family_slash_system
+setup_family_slash_system(bot, DONO_ID, SEU_ID_DO_SERVIDOR, log if 'log' in globals() else None)
