@@ -56,14 +56,14 @@ CHARACTER_ASSET_FILES = ('decor_character.png', '1ONXu.jpg')
 _character_asset_cache = None
 
 # Tamanhos de fonte (fácil de alterar)
-LOG_BADGE_FONT_SIZE = 26
-LOG_TITLE_FONT_SIZE = 42
+LOG_BADGE_FONT_SIZE = 16
+LOG_TITLE_FONT_SIZE = 30
 LOG_SUBTITLE_FONT_SIZE = 26
-LOG_BODY_FONT_SIZE = 26
-LOG_LABEL_FONT_SIZE = 24
-LOG_SMALL_FONT_SIZE = 16
+LOG_BODY_FONT_SIZE = 24
+LOG_LABEL_FONT_SIZE = 20
+LOG_SMALL_FONT_SIZE = 13
 LOG_LINE_HEIGHT = 34
-LOG_LABEL_WIDTH = 220
+LOG_LABEL_WIDTH = 290
 
 
 def _agora_brasil_str(fmt: str = "%d/%m/%Y %H:%M"):
