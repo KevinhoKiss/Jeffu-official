@@ -302,7 +302,7 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
 
 
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
-    width, height = 900, 7000
+    width, height = 900, 700
     accent = _accent_for_title(title, accent)
     badge_font = _get_font(LOG_BADGE_FONT_SIZE, True)
     hero_font = _get_font(LOG_TITLE_FONT_SIZE, True)
