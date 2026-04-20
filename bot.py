@@ -51,7 +51,7 @@ LOG_IMAGE_PILL = (37, 37, 48)
 LOG_IMAGE_SHADOW = (0, 0, 0, 135)
 LOG_IMAGE_LINE = (74, 74, 92)
 LOG_IMAGE_BLUE = (51, 118, 255)
-CHARACTER_ASSET_FILES = ('decor_character.png', '1ONXu.jpg')
+CHARACTER_ASSET_FILES = ('1ONXu.jpg', 'decor_character.png')
 _character_asset_cache = None
 
 # Tamanhos de fonte
