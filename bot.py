@@ -268,7 +268,7 @@ def _paste_bottom_character_overlay(canvas):
     scale = target_h / max(1, character.height)
     target_w = max(1, int(character.width * scale))
     character = character.resize((target_w, target_h), Image.LANCZOS)
-    x = 200
+    x = 550
     y = h - 78 - target_h - 250
     shadow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
     shadow_draw = ImageDraw.Draw(shadow)
