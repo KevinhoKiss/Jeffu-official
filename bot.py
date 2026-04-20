@@ -1,3 +1,4 @@
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -24,20 +25,32 @@ AUTORIZADOS_FILE = 'autorizados.json'
 REACTIONS_FILE = 'reactions_rules.json'
 BAN_AO_DETECTAR_CONVITE = True
 AVISAR_POR_DM_ANTES_DO_BAN = True
-MENSAGEM_DM_BAN = ('⚠️ Você foi banido automaticamente por enviar convite/propaganda no servidor.\n'
-                  'Se acreditar que foi um engano, entre em contato com a staff.')
+MENSAGEM_DM_BAN = (
+    '⚠️ Você foi banido automaticamente por enviar convite/propaganda no servidor.\n'
+    'Se acreditar que foi um engano, entre em contato com a staff.'
+)
 COOLDOWN_INTENT_SECONDS = 0
 COOLDOWN_USER_INTENT_SECONDS = 0
 CONTEXT_MAX_AGE_SECONDS = 180
 INVITE_REGEX = re.compile(r'(discord(?:\.gg|\.com/invite|app\.com/invite)/[A-Za-z0-9\-]+)', re.IGNORECASE)
 BAD_WORDS_PATTERN = re.compile(r'\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?', re.IGNORECASE)
 
+# Mongo automático
+MONGODB_URI = os.getenv('MONGODB_URI')
+MONGO_DB_NAME = os.getenv('MONGO_DB_NAME', 'scanbot')
+mongo_client = None
+mongo_db = None
+mongo_families_current = None
+mongo_families_backups = None
+mongo_guild_settings = None
+
+# intents/bot
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# ==================== LOG VISUAL ====================
+# ==================== LOG VISUAL (GERAL) ====================
 LOG_IMAGE_BG = (6, 6, 8)
 LOG_IMAGE_BG_TOP = (14, 14, 18)
 LOG_IMAGE_CARD = (22, 22, 28)
@@ -66,6 +79,7 @@ LOG_LABEL_WIDTH = 220
 def _agora_brasil_str(fmt='%d/%m/%Y %H:%M'):
     return datetime.now(ZoneInfo('America/Sao_Paulo')).strftime(fmt)
 
+
 def _font_paths(bold=False):
     base = Path(__file__).resolve().parent
     return [
@@ -75,14 +89,16 @@ def _font_paths(bold=False):
         Path('/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf'),
     ]
 
+
 def _get_font(size, bold=False):
     for path in _font_paths(bold):
         if path.exists():
             try:
                 return ImageFont.truetype(str(path), size)
-            except Exception as e:
-                print(f'[FONT FAIL] {path}: {e}')
-    raise FileNotFoundError('Nenhuma fonte TTF válida encontrada. Coloque as fontes em ./fonts/')
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
 
 def _text_width(draw, text, font):
     try:
@@ -91,6 +107,7 @@ def _text_width(draw, text, font):
         bbox = draw.textbbox((0, 0), text, font=font)
         return bbox[2] - bbox[0]
 
+
 def _text_size(draw, text, font):
     try:
         bbox = draw.textbbox((0, 0), text, font=font)
@@ -98,12 +115,14 @@ def _text_size(draw, text, font):
     except Exception:
         return _text_width(draw, text, font), getattr(font, 'size', 20)
 
+
 def _fit_font_for_width(draw, text, max_width, start_size, min_size=18, bold=False):
     for size in range(start_size, min_size - 1, -2):
         font = _get_font(size, bold)
         if _text_width(draw, text, font) <= max_width:
             return font
     return _get_font(min_size, bold)
+
 
 def _wrap_text(draw, text, font, max_width):
     text = (text or '').strip()
@@ -126,6 +145,7 @@ def _wrap_text(draw, text, font, max_width):
         lines.append(current)
     return lines
 
+
 def _crop_circle(img, size=112):
     img = img.convert('RGB').resize((size, size), Image.LANCZOS)
     mask = Image.new('L', (size, size), 0)
@@ -136,23 +156,34 @@ def _crop_circle(img, size=112):
     out.putalpha(mask)
     return out
 
+
 def _remove_light_background(img):
     img = img.convert('RGBA')
     w, h = img.size
     px = img.load()
+
     def is_light_bg(x, y):
         r, g, b, a = px[x, y]
         bright = (int(r) + int(g) + int(b)) / 3
         spread = max(r, g, b) - min(r, g, b)
         return bright >= 180 and spread <= 35
+
     bg = [[False for _ in range(w)] for _ in range(h)]
     q = deque()
     for x in range(w):
-        if is_light_bg(x, 0): q.append((x, 0)); bg[0][x] = True
-        if is_light_bg(x, h - 1) and not bg[h - 1][x]: q.append((x, h - 1)); bg[h - 1][x] = True
+        if is_light_bg(x, 0):
+            q.append((x, 0))
+            bg[0][x] = True
+        if is_light_bg(x, h - 1) and not bg[h - 1][x]:
+            q.append((x, h - 1))
+            bg[h - 1][x] = True
     for y in range(h):
-        if is_light_bg(0, y) and not bg[y][0]: q.append((0, y)); bg[y][0] = True
-        if is_light_bg(w - 1, y) and not bg[y][w - 1]: q.append((w - 1, y)); bg[y][w - 1] = True
+        if is_light_bg(0, y) and not bg[y][0]:
+            q.append((0, y))
+            bg[y][0] = True
+        if is_light_bg(w - 1, y) and not bg[y][w - 1]:
+            q.append((w - 1, y))
+            bg[y][w - 1] = True
     while q:
         x, y = q.popleft()
         for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
@@ -163,11 +194,13 @@ def _remove_light_background(img):
     alpha_px = alpha.load()
     for y in range(h):
         for x in range(w):
-            if bg[y][x]: alpha_px[x, y] = 0
+            if bg[y][x]:
+                alpha_px[x, y] = 0
     alpha = alpha.filter(ImageFilter.GaussianBlur(1.2))
     img.putalpha(alpha)
     bbox = img.getbbox()
     return img.crop(bbox) if bbox else img
+
 
 def _load_bottom_character():
     global _character_asset_cache
@@ -185,7 +218,8 @@ def _load_bottom_character():
         if chosen.lower().endswith('.png'):
             img = img.convert('RGBA')
             bbox = img.getbbox()
-            if bbox: img = img.crop(bbox)
+            if bbox:
+                img = img.crop(bbox)
         else:
             img = _remove_light_background(img)
         _character_asset_cache = img.convert('RGBA')
@@ -194,27 +228,39 @@ def _load_bottom_character():
         traceback.print_exc()
         return None
 
+
 async def _avatar_bytes(member):
-    if not member: return None
-    try: return await member.display_avatar.with_size(256).read()
-    except Exception: return None
+    if not member:
+        return None
+    try:
+        return await member.display_avatar.with_size(256).read()
+    except Exception:
+        return None
+
 
 async def _guild_icon_bytes(guild):
-    if not guild or not getattr(guild, 'icon', None): return None
-    try: return await guild.icon.with_size(128).read()
-    except Exception: return None
+    if not guild or not getattr(guild, 'icon', None):
+        return None
+    try:
+        return await guild.icon.with_size(128).read()
+    except Exception:
+        return None
+
 
 def _initials_from_member(member):
-    if not member: return '?'
+    if not member:
+        return '?'
     name = getattr(member, 'display_name', None) or getattr(member, 'name', None) or str(member)
     parts = [p for p in str(name).split() if p]
     return (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else (str(name)[:2].upper() if name else '?')
+
 
 def _draw_centered_pill(draw, cx, y, text, font, fill, text_fill, h_padding=24, v_padding=9, radius=22, max_width=None):
     tw, th = _text_size(draw, text, font)
     pill_w = tw + h_padding * 2
     pill_h = th + v_padding * 2
-    if max_width and pill_w > max_width: pill_w = max_width
+    if max_width and pill_w > max_width:
+        pill_w = max_width
     x1 = int(cx - pill_w / 2)
     x2 = int(cx + pill_w / 2)
     draw.rounded_rectangle((x1, y, x2, y + pill_h), radius=radius, fill=fill)
@@ -222,12 +268,17 @@ def _draw_centered_pill(draw, cx, y, text, font, fill, text_fill, h_padding=24, 
     ty = y + int((pill_h - th) / 2) - 1
     draw.text((tx, ty), text, font=font, fill=text_fill)
 
+
 def _accent_for_title(title, accent=None):
     title = (title or '').lower()
-    if accent: return accent
-    if 'ban' in title or 'convite' in title or 'bloqueado' in title: return (190, 72, 72)
-    if 'resposta automática' in title: return (88, 154, 255)
+    if accent:
+        return accent
+    if 'ban' in title or 'convite' in title or 'bloqueado' in title:
+        return (190, 72, 72)
+    if 'resposta automática' in title:
+        return (88, 154, 255)
     return LOG_IMAGE_ACCENT
+
 
 def _draw_vertical_gradient(canvas, top_color, bottom_color):
     w, h = canvas.size
@@ -237,9 +288,15 @@ def _draw_vertical_gradient(canvas, top_color, bottom_color):
     br, bg, bb = bottom_color
     for y in range(h):
         t = y / max(1, h - 1)
-        c = (int(tr + (br - tr) * t), int(tg + (bg - tg) * t), int(tb + (bb - tb) * t))
-        for x in range(w): px[x, y] = c
+        c = (
+            int(tr + (br - tr) * t),
+            int(tg + (bg - tg) * t),
+            int(tb + (bb - tb) * t),
+        )
+        for x in range(w):
+            px[x, y] = c
     return base
+
 
 def _draw_background(canvas):
     w, h = canvas.size
@@ -253,6 +310,7 @@ def _draw_background(canvas):
     draw.rectangle((0, h - 18, w, h), fill=(44, 28, 139))
     draw.line((0, h - 78, w, h - 78), fill=LOG_IMAGE_BLUE, width=2)
 
+
 def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
     glow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
@@ -260,10 +318,13 @@ def _paste_glow(canvas, box, color, blur=24, alpha=115, radius=28):
     glow = glow.filter(ImageFilter.GaussianBlur(blur))
     return Image.alpha_composite(canvas, glow)
 
+
 def _paste_bottom_character_overlay(canvas):
     character = _load_bottom_character()
-    if character is None: return canvas
-    if character.mode != 'RGBA': character = character.convert('RGBA')
+    if character is None:
+        return canvas
+    if character.mode != 'RGBA':
+        character = character.convert('RGBA')
     w, h = canvas.size
     target_h = 95
     scale = target_h / max(1, character.height)
@@ -284,13 +345,16 @@ def _paste_bottom_character_overlay(canvas):
 def _mentions_jeffu(message):
     try:
         content = (message.content or '').lower()
-        if 'jeffu' in content: return True
+        if 'jeffu' in content:
+            return True
         for m in getattr(message, 'mentions', []):
             name = (getattr(m, 'display_name', None) or getattr(m, 'name', '') or '').lower()
-            if 'jeffu' in name: return True
+            if 'jeffu' in name:
+                return True
     except Exception:
         pass
     return False
+
 
 def normalize_text(text):
     text = (text or '').lower().strip()
@@ -302,14 +366,18 @@ def normalize_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
+
 def contains_term(text, term):
     text = normalize_text(text)
     term = normalize_text(term)
-    if not term: return False
+    if not term:
+        return False
     return re.search(rf'(?<!\w){re.escape(term)}(?!\w)', text) is not None
+
 
 def find_matches(text, terms):
     return [term for term in terms if contains_term(text, term)]
+
 
 def short_greeting_type(text):
     text = normalize_text(text)
@@ -319,33 +387,52 @@ def short_greeting_type(text):
         'boa noite': ['boa noite', 'boa noite gente', 'boa noite pessoal'],
     }
     for label, variants in greetings.items():
-        if text in variants: return label
+        if text in variants:
+            return label
     return None
+
 
 CHANNEL_CONTEXT = defaultdict(lambda: deque(maxlen=12))
 USER_CHANNEL_CONTEXT = defaultdict(lambda: deque(maxlen=8))
 LAST_INTENT_REPLY_TS = {}
 LAST_USER_INTENT_REPLY_TS = {}
 
+
 def _channel_key(message):
     guild_id = message.guild.id if message.guild else 0
     return (guild_id, message.channel.id)
+
 
 def _user_channel_key(message):
     guild_id = message.guild.id if message.guild else 0
     return (guild_id, message.channel.id, message.author.id)
 
+
 def remember_context(message, intent, score, matched_groups, reply):
-    record = {'intent': intent, 'score': score, 'matched_groups': matched_groups, 'reply': reply, 'ts': time.time(), 'user_id': message.author.id, 'channel_id': message.channel.id}
+    record = {
+        'intent': intent,
+        'score': score,
+        'matched_groups': matched_groups,
+        'reply': reply,
+        'ts': time.time(),
+        'user_id': message.author.id,
+        'channel_id': message.channel.id,
+    }
     CHANNEL_CONTEXT[_channel_key(message)].append(record)
     USER_CHANNEL_CONTEXT[_user_channel_key(message)].append(record)
+
 
 def _recent_context(records, max_age=CONTEXT_MAX_AGE_SECONDS):
     now = time.time()
     return [r for r in records if now - r.get('ts', 0) <= max_age]
 
+
 def get_recent_intents(message):
-    return {'channel': _recent_context(CHANNEL_CONTEXT[_channel_key(message)]), 'user_channel': _recent_context(USER_CHANNEL_CONTEXT[_user_channel_key(message)])}
+    return {
+        'channel': _recent_context(CHANNEL_CONTEXT[_channel_key(message)]),
+        'user_channel': _recent_context(USER_CHANNEL_CONTEXT[_user_channel_key(message)]),
+    }
+
 
 def cooldown_status(message, intent):
     now = time.time()
@@ -353,30 +440,68 @@ def cooldown_status(message, intent):
     user_key = (_user_channel_key(message), intent)
     channel_wait = max(0, COOLDOWN_INTENT_SECONDS - int(now - LAST_INTENT_REPLY_TS.get(channel_key, 0)))
     user_wait = max(0, COOLDOWN_USER_INTENT_SECONDS - int(now - LAST_USER_INTENT_REPLY_TS.get(user_key, 0)))
-    return {'blocked': channel_wait > 0 or user_wait > 0, 'channel_wait': channel_wait, 'user_wait': user_wait}
+    return {
+        'blocked': channel_wait > 0 or user_wait > 0,
+        'channel_wait': channel_wait,
+        'user_wait': user_wait,
+    }
+
 
 def mark_cooldown(message, intent):
     now = time.time()
     LAST_INTENT_REPLY_TS[(_channel_key(message), intent)] = now
     LAST_USER_INTENT_REPLY_TS[(_user_channel_key(message), intent)] = now
 
+
 INTENT_RULES = {
-    'site_status': {'reply': '🌐 Veja em <#1409296003034644542>', 'threshold': 7, 'groups': [
-        {'name': 'entidade', 'terms': ['site', 'sistema', 'app', 'aplicativo', 'plataforma'], 'weight': 3, 'required': True, 'cap': 1},
-        {'name': 'problema', 'terms': ['caiu', 'fora do ar', 'offline', 'nao funciona', 'nao abre', 'saiu do ar', 'instavel', 'lento', 'travando', 'bugado', 'carregando', 'erro'], 'weight': 4, 'required': True, 'cap': 2},
-    ], 'followup_terms': ['continua', 'ainda', 'voltou', 'normalizou', 'agora', 'ruim', 'instavel', 'lento', 'fora', 'piorou', 'melhorou'], 'negatives': ['site bonito', 'site lindo', 'gostei do site', 'nome do site'], 'context_boost_user': 5, 'context_boost_channel': 3},
-    'support': {'reply': '🔐 Para suporte, vá em <#1479642544429076500>', 'threshold': 6, 'groups': [
-        {'name': 'assunto', 'terms': ['login', 'senha', 'acesso', 'conta', 'ticket', 'suporte', 'entrar', 'logar', 'acessar'], 'weight': 3, 'required': True, 'cap': 2},
-        {'name': 'problema', 'terms': ['nao consigo', 'não consigo', 'esqueci', 'erro', 'ajuda', 'recuperar', 'sem acesso', 'problema', 'abrir', 'como', 'falhou', 'travou', 'nao entra', 'não entra'], 'weight': 3, 'required': True, 'cap': 2},
-    ], 'followup_terms': ['continua', 'ainda', 'deu ruim', 'nao foi', 'não foi', 'nao resolveu', 'não resolveu', 'nao deu', 'não deu', 'continua igual'], 'negatives': ['minha senha e forte', 'gostei da senha', 'troquei minha senha e pronto'], 'context_boost_user': 5, 'context_boost_channel': 2},
-    'obra_suggestion': {'reply': '📚 Sugestões de obras é em <#1466087941506990171>', 'threshold': 6, 'groups': [
-        {'name': 'midia', 'terms': ['obra', 'obras', 'manga', 'manhwa', 'novel', 'titulo', 'titulos'], 'weight': 2, 'required': True, 'cap': 2},
-        {'name': 'intencao', 'terms': ['sugestao', 'sugestoes', 'indicar', 'indicacao', 'recomendar', 'recomendacao'], 'weight': 4, 'required': True, 'cap': 2},
-    ], 'followup_terms': ['onde sugiro', 'onde mando', 'tem canal', 'posso indicar'], 'negatives': ['obra boa', 'essa obra e ruim', 'terminei a obra'], 'context_boost_user': 4, 'context_boost_channel': 2},
-    'missing_chapters': {'reply': '<#1452799882149761144>', 'threshold': 7, 'groups': [
-        {'name': 'assunto', 'terms': ['capitulo', 'capitulos'], 'weight': 3, 'required': True, 'cap': 2},
-        {'name': 'problema', 'terms': ['faltando', 'faltam', 'sumiu', 'sumiram', 'nao tem', 'incompleto', 'cade', 'onde estao', 'faltou', 'nao veio'], 'weight': 4, 'required': True, 'cap': 2},
-    ], 'followup_terms': ['continua', 'ainda', 'sumiu', 'faltando', 'sem', 'nao veio', 'segue faltando'], 'negatives': ['esse capitulo foi bom', 'li o capitulo', 'gostei do capitulo'], 'context_boost_user': 5, 'context_boost_channel': 3},
+    'site_status': {
+        'reply': '🌐 Veja em <#1409296003034644542>',
+        'threshold': 7,
+        'groups': [
+            {'name': 'entidade', 'terms': ['site', 'sistema', 'app', 'aplicativo', 'plataforma'], 'weight': 3, 'required': True, 'cap': 1},
+            {'name': 'problema', 'terms': ['caiu', 'fora do ar', 'offline', 'nao funciona', 'nao abre', 'saiu do ar', 'instavel', 'lento', 'travando', 'bugado', 'carregando', 'erro'], 'weight': 4, 'required': True, 'cap': 2},
+        ],
+        'followup_terms': ['continua', 'ainda', 'voltou', 'normalizou', 'agora', 'ruim', 'instavel', 'lento', 'fora', 'piorou', 'melhorou'],
+        'negatives': ['site bonito', 'site lindo', 'gostei do site', 'nome do site'],
+        'context_boost_user': 5,
+        'context_boost_channel': 3,
+    },
+    'support': {
+        'reply': '🔐 Para suporte, vá em <#1479642544429076500>',
+        'threshold': 6,
+        'groups': [
+            {'name': 'assunto', 'terms': ['login', 'senha', 'acesso', 'conta', 'ticket', 'suporte', 'entrar', 'logar', 'acessar'], 'weight': 3, 'required': True, 'cap': 2},
+            {'name': 'problema', 'terms': ['nao consigo', 'não consigo', 'esqueci', 'erro', 'ajuda', 'recuperar', 'sem acesso', 'problema', 'abrir', 'como', 'falhou', 'travou', 'nao entra', 'não entra'], 'weight': 3, 'required': True, 'cap': 2},
+        ],
+        'followup_terms': ['continua', 'ainda', 'deu ruim', 'nao foi', 'não foi', 'nao resolveu', 'não resolveu', 'nao deu', 'não deu', 'continua igual'],
+        'negatives': ['minha senha e forte', 'gostei da senha', 'troquei minha senha e pronto'],
+        'context_boost_user': 5,
+        'context_boost_channel': 2,
+    },
+    'obra_suggestion': {
+        'reply': '📚 Sugestões de obras é em <#1466087941506990171>',
+        'threshold': 6,
+        'groups': [
+            {'name': 'midia', 'terms': ['obra', 'obras', 'manga', 'manhwa', 'novel', 'titulo', 'titulos'], 'weight': 2, 'required': True, 'cap': 2},
+            {'name': 'intencao', 'terms': ['sugestao', 'sugestoes', 'indicar', 'indicacao', 'recomendar', 'recomendacao'], 'weight': 4, 'required': True, 'cap': 2},
+        ],
+        'followup_terms': ['onde sugiro', 'onde mando', 'tem canal', 'posso indicar'],
+        'negatives': ['obra boa', 'essa obra e ruim', 'terminei a obra'],
+        'context_boost_user': 4,
+        'context_boost_channel': 2,
+    },
+    'missing_chapters': {
+        'reply': '<#1452799882149761144>',
+        'threshold': 7,
+        'groups': [
+            {'name': 'assunto', 'terms': ['capitulo', 'capitulos'], 'weight': 3, 'required': True, 'cap': 2},
+            {'name': 'problema', 'terms': ['faltando', 'faltam', 'sumiu', 'sumiram', 'nao tem', 'incompleto', 'cade', 'onde estao', 'faltou', 'nao veio'], 'weight': 4, 'required': True, 'cap': 2},
+        ],
+        'followup_terms': ['continua', 'ainda', 'sumiu', 'faltando', 'sem', 'nao veio', 'segue faltando'],
+        'negatives': ['esse capitulo foi bom', 'li o capitulo', 'gostei do capitulo'],
+        'context_boost_user': 5,
+        'context_boost_channel': 3,
+    },
 }
 
 GREETING_REPLIES = {
@@ -385,14 +510,19 @@ GREETING_REPLIES = {
     'boa noite': 'Boa noite! Como foi seu dia hoje? Espero que esteja tendo uma noite maravilhosa como você! <a:emoji_3:1466600609502204058>',
 }
 
-def humanize_intent(intent):
-    return {'greeting': 'saudação', 'support': 'suporte', 'site_status': 'status do site', 'obra_suggestion': 'sugestão de obra', 'missing_chapters': 'capítulos faltando'}.get(intent, intent.replace('_', ' '))
 
 def score_intent(normalized_text, intent_name, rule, context):
     score, matched_groups, missing_required = 0, {}, []
     for negative in rule.get('negatives', []):
         if contains_term(normalized_text, negative):
-            return {'intent': intent_name, 'score': -999, 'matched_groups': {}, 'missing_required': [], 'context_used': None, 'negative_hit': negative}
+            return {
+                'intent': intent_name,
+                'score': -999,
+                'matched_groups': {},
+                'missing_required': [],
+                'context_used': None,
+                'negative_hit': negative,
+            }
     for group in rule.get('groups', []):
         matches = find_matches(normalized_text, group.get('terms', []))
         if matches:
@@ -402,6 +532,7 @@ def score_intent(normalized_text, intent_name, rule, context):
             matched_groups[group['name']] = {'matches': matches, 'score': group_score}
         elif group.get('required'):
             missing_required.append(group['name'])
+
     context_used = None
     user_recent = context.get('user_channel', [])
     chan_recent = context.get('channel', [])
@@ -409,119 +540,196 @@ def score_intent(normalized_text, intent_name, rule, context):
     channel_same_intent = any(item.get('intent') == intent_name for item in chan_recent)
     followup_matches = find_matches(normalized_text, rule.get('followup_terms', []))
     if user_same_intent and followup_matches:
-        boost = int(rule.get('context_boost_user', 0)); score += boost; matched_groups['contexto_usuario_canal'] = {'matches': followup_matches, 'score': boost}; context_used = 'user_channel'
+        boost = int(rule.get('context_boost_user', 0))
+        score += boost
+        matched_groups['contexto_usuario_canal'] = {'matches': followup_matches, 'score': boost}
+        context_used = 'user_channel'
     elif channel_same_intent and followup_matches:
-        boost = int(rule.get('context_boost_channel', 0)); score += boost; matched_groups['contexto_canal'] = {'matches': followup_matches, 'score': boost}; context_used = 'channel'
+        boost = int(rule.get('context_boost_channel', 0))
+        score += boost
+        matched_groups['contexto_canal'] = {'matches': followup_matches, 'score': boost}
+        context_used = 'channel'
+
     if missing_required and context_used is None:
         score -= 2 * len(missing_required)
-    return {'intent': intent_name, 'score': score, 'matched_groups': matched_groups, 'missing_required': missing_required, 'context_used': context_used, 'negative_hit': None}
+
+    return {
+        'intent': intent_name,
+        'score': score,
+        'matched_groups': matched_groups,
+        'missing_required': missing_required,
+        'context_used': context_used,
+        'negative_hit': None,
+    }
+
 
 def detect_auto_reply(message):
     raw_text = message.content or ''
     text = normalize_text(raw_text)
-    if not text: return None
+    if not text:
+        return None
     greeting = short_greeting_type(text)
     if greeting:
-        return {'intent': 'greeting', 'reply': GREETING_REPLIES[greeting], 'score': 999, 'matched_groups': {'greeting': {'matches': [greeting], 'score': 999}}, 'context_used': None, 'threshold': 1, 'negative_hit': None, 'missing_required': []}
+        return {
+            'intent': 'greeting',
+            'reply': GREETING_REPLIES[greeting],
+            'score': 999,
+            'matched_groups': {'greeting': {'matches': [greeting], 'score': 999}},
+            'context_used': None,
+            'threshold': 1,
+            'negative_hit': None,
+            'missing_required': [],
+        }
     context = get_recent_intents(message)
     candidates = []
     for intent_name, rule in INTENT_RULES.items():
         scored = score_intent(text, intent_name, rule, context)
-        scored['reply'] = rule['reply']; scored['threshold'] = rule['threshold']; candidates.append(scored)
+        scored['reply'] = rule['reply']
+        scored['threshold'] = rule['threshold']
+        candidates.append(scored)
     candidates = [c for c in candidates if c['score'] > -999]
-    if not candidates: return None
+    if not candidates:
+        return None
     best = max(candidates, key=lambda x: x['score'])
     return best if best['score'] >= best['threshold'] else None
 
 # ==================== MODERAÇÃO ====================
 def get_bot_member(guild):
-    try: return guild.me or (guild.get_member(bot.user.id) if bot.user else None)
-    except Exception: return None
+    try:
+        return guild.me or (guild.get_member(bot.user.id) if bot.user else None)
+    except Exception:
+        return None
+
 
 def channel_perm_snapshot(message):
     bot_member = get_bot_member(message.guild) if message.guild else None
     if not message.guild or not bot_member:
-        return {'manage_messages': False, 'manage_roles': False, 'ban_members': False, 'send_messages': False, 'attach_files': False, 'read_message_history': False}
+        return {
+            'manage_messages': False,
+            'manage_roles': False,
+            'ban_members': False,
+            'send_messages': False,
+            'attach_files': False,
+            'read_message_history': False,
+        }
     perms = message.channel.permissions_for(bot_member)
-    return {'manage_messages': perms.manage_messages, 'manage_roles': bot_member.guild_permissions.manage_roles, 'ban_members': bot_member.guild_permissions.ban_members, 'send_messages': perms.send_messages, 'attach_files': perms.attach_files, 'read_message_history': perms.read_message_history}
+    return {
+        'manage_messages': perms.manage_messages,
+        'manage_roles': bot_member.guild_permissions.manage_roles,
+        'ban_members': bot_member.guild_permissions.ban_members,
+        'send_messages': perms.send_messages,
+        'attach_files': perms.attach_files,
+        'read_message_history': perms.read_message_history,
+    }
+
 
 def build_missing_perms_reason(snapshot):
     missing = []
-    if not snapshot.get('manage_messages'): missing.append('Gerenciar Mensagens')
-    if not snapshot.get('manage_roles'): missing.append('Gerenciar Cargos')
-    if not snapshot.get('ban_members'): missing.append('Banir Membros')
-    if not snapshot.get('send_messages'): missing.append('Enviar Mensagens')
-    if not snapshot.get('attach_files'): missing.append('Anexar Arquivos')
+    if not snapshot.get('manage_messages'):
+        missing.append('Gerenciar Mensagens')
+    if not snapshot.get('manage_roles'):
+        missing.append('Gerenciar Cargos')
+    if not snapshot.get('ban_members'):
+        missing.append('Banir Membros')
+    if not snapshot.get('send_messages'):
+        missing.append('Enviar Mensagens')
+    if not snapshot.get('attach_files'):
+        missing.append('Anexar Arquivos')
     return 'Permissões ausentes: ' + ', '.join(missing) if missing else 'sem permissões ausentes'
 
+
 async def try_delete_message(message):
-    if not message.guild: return False, 'mensagem fora de servidor'
+    if not message.guild:
+        return False, 'mensagem fora de servidor'
     snapshot = channel_perm_snapshot(message)
-    if not snapshot.get('manage_messages'): return False, 'sem permissão Gerenciar Mensagens'
+    if not snapshot.get('manage_messages'):
+        return False, 'sem permissão Gerenciar Mensagens'
     try:
-        await message.delete(); return True, 'mensagem removida'
+        await message.delete()
+        return True, 'mensagem removida'
     except discord.Forbidden:
         return False, 'discord retornou Missing Permissions ao apagar'
     except Exception as e:
         return False, f'falha ao apagar: {e}'
 
+
 async def try_send_dm_warning(member, message_text, channel_name, reason):
-    if not member: return False, 'membro inválido'
-    if not AVISAR_POR_DM_ANTES_DO_BAN: return False, 'aviso por DM desativado'
-    dm_content = f'{MENSAGEM_DM_BAN}\n\nCanal: {channel_name or "desconhecido"}\nMotivo: {reason}\nMensagem: {message_text or "sem mensagem"}'
+    if not member:
+        return False, 'membro inválido'
+    if not AVISAR_POR_DM_ANTES_DO_BAN:
+        return False, 'aviso por DM desativado'
+    dm_content = f"{MENSAGEM_DM_BAN}\n\nCanal: {channel_name or 'desconhecido'}\nMotivo: {reason}\nMensagem: {message_text or 'sem mensagem'}"
     try:
-        await member.send(dm_content); return True, 'aviso por DM enviado'
+        await member.send(dm_content)
+        return True, 'aviso por DM enviado'
     except discord.Forbidden:
         return False, 'DM fechada ou bloqueada'
     except Exception as e:
         return False, f'falha ao enviar DM: {e}'
 
+
 async def try_ban_member(guild, member, reason='Ban automático'):
-    if not guild or not member: return False, 'guild ou membro inválido'
+    if not guild or not member:
+        return False, 'guild ou membro inválido'
     bot_member = get_bot_member(guild)
-    if not bot_member: return False, 'bot não encontrado no servidor'
-    if not bot_member.guild_permissions.ban_members: return False, 'sem permissão Banir Membros'
+    if not bot_member:
+        return False, 'bot não encontrado no servidor'
+    if not bot_member.guild_permissions.ban_members:
+        return False, 'sem permissão Banir Membros'
     try:
-        if member == guild.owner: return False, 'não posso banir o dono do servidor'
+        if member == guild.owner:
+            return False, 'não posso banir o dono do servidor'
     except Exception:
         pass
     try:
-        if bot_member.top_role <= member.top_role: return False, 'hierarquia insuficiente para banir'
+        if bot_member.top_role <= member.top_role:
+            return False, 'hierarquia insuficiente para banir'
     except Exception:
         pass
     try:
-        await member.ban(reason=reason); return True, 'usuário banido'
+        await member.ban(reason=reason)
+        return True, 'usuário banido'
     except discord.Forbidden:
         return False, 'discord retornou Missing Permissions ao banir'
     except Exception as e:
         return False, f'falha ao banir: {e}'
 
+
 async def audit_permission_status(guild):
     bot_member = get_bot_member(guild)
-    if not guild or not bot_member: return
+    if not guild or not bot_member:
+        return
     missing = []
-    if not bot_member.guild_permissions.manage_messages: missing.append('Gerenciar Mensagens')
-    if not bot_member.guild_permissions.ban_members: missing.append('Banir Membros')
-    if missing: print('[PERMS WARN] Bot sem permissões globais importantes:', ', '.join(missing))
+    if not bot_member.guild_permissions.manage_messages:
+        missing.append('Gerenciar Mensagens')
+    if not bot_member.guild_permissions.ban_members:
+        missing.append('Banir Membros')
+    if missing:
+        print('[PERMS WARN] Bot sem permissões globais importantes:', ', '.join(missing))
 
 # ==================== REAÇÕES ====================
 _reaction_rules = {}
+
 
 def _load_reaction_rules():
     global _reaction_rules
     try:
         if os.path.exists(REACTIONS_FILE):
-            with open(REACTIONS_FILE, 'r', encoding='utf-8') as f: _reaction_rules = json.load(f)
+            with open(REACTIONS_FILE, 'r', encoding='utf-8') as f:
+                _reaction_rules = json.load(f)
         else:
             _reaction_rules = {}
     except Exception:
         _reaction_rules = {}
 
+
 def _save_reaction_rules():
     try:
-        with open(REACTIONS_FILE, 'w', encoding='utf-8') as f: json.dump(_reaction_rules, f, indent=2, ensure_ascii=False)
+        with open(REACTIONS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_reaction_rules, f, indent=2, ensure_ascii=False)
     except Exception:
         traceback.print_exc()
+
 
 def _ensure_default_rules_for_all_guilds():
     default_rules = [
@@ -531,7 +739,8 @@ def _ensure_default_rules_for_all_guilds():
     ]
     for guild in bot.guilds:
         gk = str(guild.id)
-        if gk not in _reaction_rules: _reaction_rules[gk] = {'by_keyword': []}
+        if gk not in _reaction_rules:
+            _reaction_rules[gk] = {'by_keyword': []}
         existing = _reaction_rules[gk].get('by_keyword', [])
         for rule in default_rules:
             for kw in rule['keywords']:
@@ -539,6 +748,7 @@ def _ensure_default_rules_for_all_guilds():
                     existing.append({'channel_id': 0, 'keyword': kw, 'is_regex': False, 'emojis': rule['emojis']})
         _reaction_rules[gk]['by_keyword'] = existing
     _save_reaction_rules()
+
 
 async def _try_add_reaction(message, emoji):
     try:
@@ -554,7 +764,33 @@ async def _try_add_reaction(message, emoji):
             pass
     return False
 
-# ==================== LOG IMAGE BUILDER / LOGGER ====================
+
+async def _apply_keyword_reactions(message):
+    if not message.guild or message.author.bot:
+        return
+    rules = _reaction_rules.get(str(message.guild.id), {}).get('by_keyword', [])
+    text = (message.content or '').lower()
+    for rule in rules:
+        channel_id = int(rule.get('channel_id') or 0)
+        if channel_id and message.channel.id != channel_id:
+            continue
+        keyword = (rule.get('keyword') or '').lower().strip()
+        if not keyword:
+            continue
+        matched = False
+        if rule.get('is_regex'):
+            try:
+                matched = re.search(keyword, message.content or '', re.IGNORECASE) is not None
+            except Exception:
+                matched = False
+        else:
+            matched = keyword in text
+        if matched:
+            for emoji in rule.get('emojis', []):
+                await _try_add_reaction(message, emoji)
+            break
+
+# ==================== LOG GERAL ====================
 async def _build_log_image(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=None):
     width, height = 1000, 800
     accent = _accent_for_title(title, accent)
@@ -567,7 +803,13 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     body_font = _get_font(LOG_BODY_FONT_SIZE, False)
     label_font = _get_font(LOG_LABEL_FONT_SIZE, True)
     small_font = _get_font(LOG_SMALL_FONT_SIZE, False)
-    lines = [('Nome', display_name), ('Chat', channel_name or 'sistema'), ('Motivo', reason or 'não informado'), ('Ação', action or 'não informada'), ('Mensagem', message_text or 'sem mensagem')]
+    lines = [
+        ('Nome', display_name),
+        ('Chat', channel_name or 'sistema'),
+        ('Motivo', reason or 'não informado'),
+        ('Ação', action or 'não informada'),
+        ('Mensagem', message_text or 'sem mensagem'),
+    ]
     card_w = 860
     card_x = (width - card_w) // 2
     card_y = 70
@@ -650,6 +892,7 @@ async def _build_log_image(guild, member=None, title='Log', channel_name='', rea
     bio.seek(0)
     return bio
 
+
 async def log(guild, member=None, title='Log', channel_name='', reason='', action='', message_text='', accent=LOG_IMAGE_ACCENT, target_channel_id=None, fallback_channel_name='mod-logs'):
     try:
         canal = None
@@ -665,7 +908,8 @@ async def log(guild, member=None, title='Log', channel_name='', reason='', actio
                     image_bytes = await _build_log_image(guild, member=member, title=title, channel_name=channel_name, reason=reason, action=action, message_text=message_text, accent=accent)
                     await canal.send(file=discord.File(fp=image_bytes, filename='log.png'))
                 else:
-                    await canal.send(f"{title} | Nome: {(getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'} | Chat: {channel_name} | Motivo: {reason} | Ação: {action} | Mensagem: {message_text}")
+                    who = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
+                    await canal.send(f"**{title}**\nNome: {who}\nChat: {channel_name}\nMotivo: {reason}\nAção: {action}\nMensagem: {message_text}")
             except Exception:
                 traceback.print_exc()
         else:
@@ -673,122 +917,8 @@ async def log(guild, member=None, title='Log', channel_name='', reason='', actio
     except Exception:
         traceback.print_exc()
 
-# ==================== EVENTOS ====================
-@bot.event
-async def on_message(message):
-    try:
-        if message.author.bot: return
-        if getattr(message, 'webhook_id', None) is not None: return
-        if not message.content and message.embeds: return
-
-        try:
-            guild = message.guild
-            if guild:
-                gk = str(guild.id)
-                rules = _reaction_rules.get(gk, {})
-                for kw in rules.get('by_keyword', []):
-                    try:
-                        ch_id = int(kw.get('channel_id', 0))
-                        if ch_id != 0 and ch_id != message.channel.id: continue
-                        content = (message.content or '')
-                        if not content: continue
-                        if kw.get('is_regex'):
-                            try:
-                                if re.search(kw.get('keyword', ''), content, re.IGNORECASE):
-                                    for em in kw.get('emojis', []): await _try_add_reaction(message, em)
-                            except re.error:
-                                print('[REACTIONS WARN] Regex inválida para regra:', kw.get('keyword'))
-                        else:
-                            if kw.get('keyword', '').lower() in content.lower():
-                                for em in kw.get('emojis', []): await _try_add_reaction(message, em)
-                    except Exception:
-                        pass
-        except Exception as e:
-            print('[REACTIONS ERROR] ao aplicar regras:', e)
-            traceback.print_exc()
-
-        texto = (message.content or '').strip()
-        if message.guild and BAN_AO_DETECTAR_CONVITE and INVITE_REGEX.search(texto):
-            if message.author.guild_permissions.administrator or message.author.id == DONO_ID:
-                await bot.process_commands(message)
-                return
-            delete_ok, delete_note = await try_delete_message(message)
-            dm_ok, dm_note = False, ''
-            ban_ok, ban_note = False, ''
-            member_obj = message.guild.get_member(message.author.id)
-            if member_obj:
-                dm_ok, dm_note = await try_send_dm_warning(member_obj, message.content or 'sem mensagem', getattr(message.channel, 'name', 'desconhecido'), 'Envio de convite/propaganda detectado')
-                ban_ok, ban_note = await try_ban_member(message.guild, member_obj, reason='Ban automático por envio de convite')
-            else:
-                dm_note = 'membro não encontrado'; ban_note = 'membro não encontrado'
-            action_parts = [
-                'mensagem removida' if delete_ok else f'mensagem não removida ({delete_note})',
-                dm_note if dm_note else ('aviso por DM enviado' if dm_ok else 'DM não enviada'),
-                ban_note if ban_note else ('usuário banido' if ban_ok else 'ban não aplicado')
-            ]
-            await log(message.guild, member=message.author, title='Ban automático', channel_name=getattr(message.channel, 'name', 'desconhecido'), reason=build_missing_perms_reason(channel_perm_snapshot(message)) if (not delete_ok or not ban_ok) else 'Convite detectado na mensagem', action='; '.join([p for p in action_parts if p]), message_text=(message.content or 'sem mensagem'), target_channel_id=BAN_LOG_CHANNEL_ID, fallback_channel_name='ban-logs')
-            return
-
-        result = detect_auto_reply(message)
-        if result:
-            cd = cooldown_status(message, result['intent'])
-            if cd['blocked']:
-                why_blocked = []
-                if cd['channel_wait'] > 0: why_blocked.append(f"cooldown_canal={cd['channel_wait']}s")
-                if cd['user_wait'] > 0: why_blocked.append(f"cooldown_usuario={cd['user_wait']}s")
-                if message.guild:
-                    await log(message.guild, member=message.author, title='Resposta automática bloqueada', channel_name=getattr(message.channel, 'name', 'desconhecido'), reason=f"Cooldown ativo: {' ; '.join(why_blocked)}", action=f"Resposta da intenção {humanize_intent(result['intent'])} não foi enviada", message_text=(message.content or 'sem mensagem'))
-            else:
-                remember_context(message, result['intent'], result['score'], result['matched_groups'], result['reply'])
-                mark_cooldown(message, result['intent'])
-                try:
-                    await message.reply(result['reply'], mention_author=False)
-                except Exception as e:
-                    print('[AUTO-REPLY WARN] Falha ao enviar resposta automática:', e)
-                    traceback.print_exc()
-                if message.guild:
-                    await log(message.guild, member=message.author, title='Resposta automática enviada', channel_name=getattr(message.channel, 'name', 'desconhecido'), reason=f"Intenção detectada: {humanize_intent(result['intent'])}", action='Resposta automática enviada com sucesso', message_text=(message.content or 'sem mensagem'))
-                return
-
-        is_dm = isinstance(message.channel, discord.DMChannel)
-        mentions_bot = bot.user in message.mentions if bot.user else False
-        should_respond_personal = is_dm or mentions_bot
-        if should_respond_personal:
-            if re.search(r'(agradecido|obg|obrigado)', texto, re.IGNORECASE) and _mentions_jeffu(message):
-                await message.reply('Não há de que <:amem:1466774899686117426>', mention_author=False)
-                return
-            if re.search(r'(te amo|amo vc|amo você|amo voce)', texto, re.IGNORECASE) and _mentions_jeffu(message):
-                await message.reply('💙 Obrigado... <:shame:1466777359586693376>', mention_author=False)
-                return
-            if BAD_WORDS_PATTERN.search(texto):
-                try:
-                    await message.reply('<:looking:1466793665463844894> Me deixa trabalhar, poxa...', mention_author=False)
-                except Exception:
-                    pass
-                return
-        await bot.process_commands(message)
-    except Exception as e:
-        print(f'Erro no on_message: {e}')
-        traceback.print_exc()
-
-@bot.event
-async def on_ready():
-    print(f'[BOT] Logado como {bot.user} (id: {bot.user.id})')
-    try:
-        _load_reaction_rules(); _ensure_default_rules_for_all_guilds()
-    except Exception as e:
-        print('[DEFAULT RULES WARN] Falha ao garantir regras padrão:', e)
-        traceback.print_exc()
-    try:
-        for guild in bot.guilds: await audit_permission_status(guild)
-    except Exception:
-        traceback.print_exc()
-
-
-# ==================== SISTEMA DE FAMÍLIAS (V4 INTEGRADO) ====================
-from typing import Optional, Tuple
-
-FAMILIAS_DB_FILE = 'familias_system.json'
+# ==================== SISTEMA DE FAMÍLIAS (V4) ====================
+FAMILIAS_DB_FILE = ARQUIVO
 FAMILY_HEX_COLOR_RE = re.compile(r'^#?[0-9a-fA-F]{6}$')
 
 
@@ -806,6 +936,7 @@ def _family_db_load() -> dict:
 def _family_db_save(data: dict):
     with open(FAMILIAS_DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    mongo_sync_families_snapshot(data)
 
 
 def _family_slug(text: str) -> str:
@@ -837,7 +968,7 @@ def _family_bucket(data: dict, guild_id: int) -> dict:
     return bucket
 
 
-def _family_find(bucket: dict, family_name: str) -> Tuple[Optional[str], Optional[dict]]:
+def _family_find(bucket: dict, family_name: str):
     slug = _family_slug(family_name)
     families = bucket.get('families', {})
     if slug in families:
@@ -849,12 +980,12 @@ def _family_find(bucket: dict, family_name: str) -> Tuple[Optional[str], Optiona
     return None, None
 
 
-def _family_find_by_slug(bucket: dict, slug: str) -> Tuple[Optional[str], Optional[dict]]:
+def _family_find_by_slug(bucket: dict, slug: str):
     fam = bucket.get('families', {}).get(slug)
     return (slug, fam) if fam else (None, None)
 
 
-def _family_parse_color(value: Optional[str]):
+def _family_parse_color(value: str | None):
     if not value:
         return discord.Colour(0x7c5cff), '#7c5cff'
     value = value.strip()
@@ -887,7 +1018,7 @@ def _family_can_manage(interaction: discord.Interaction, bucket: dict, family: d
     return _family_has_admin(interaction, bucket) or int(family.get('leader_id', 0)) == interaction.user.id
 
 
-async def _family_remove_member_from_other_families(guild: discord.Guild, bucket: dict, member: discord.Member, keep_slug: Optional[str] = None):
+async def _family_remove_member_from_other_families(guild: discord.Guild, bucket: dict, member: discord.Member, keep_slug: str | None = None):
     changed = False
     for slug, fam in list(bucket.get('families', {}).items()):
         if keep_slug and slug == keep_slug:
@@ -930,7 +1061,7 @@ def _family_build_embed(title: str, description: str, color: int = 0x7c5cff) -> 
     return discord.Embed(title=title, description=description, color=color)
 
 
-def _family_build_details_embed(guild: discord.Guild, family: dict, selected_member: Optional[discord.Member] = None) -> discord.Embed:
+def _family_build_details_embed(guild: discord.Guild, family: dict, selected_member: discord.Member | None = None) -> discord.Embed:
     role = guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
     leader = guild.get_member(int(family.get('leader_id', 0))) if family.get('leader_id') else None
     members = []
@@ -954,7 +1085,7 @@ def _family_build_details_embed(guild: discord.Guild, family: dict, selected_mem
     return embed
 
 
-# --------- LOG VERDE DE FAMÍLIA ---------
+# Log verde de família
 FAMILY_LOG_BG_TOP = (16, 73, 40)
 FAMILY_LOG_BG = (8, 44, 24)
 FAMILY_LOG_CARD = (18, 60, 36)
@@ -1059,11 +1190,9 @@ async def _send_family_log(guild: discord.Guild, member=None, title='Log de Fam�
         bucket = _family_bucket(data, guild.id)
         channel_id = bucket.get('family_log_channel_id')
         if not channel_id:
-            print('[FAMILIAS LOG] family_log_channel_id não configurado.')
             return
         canal = guild.get_channel(int(channel_id))
         if canal is None:
-            print('[FAMILIAS LOG] canal não encontrado:', channel_id)
             return
         perms = canal.permissions_for(guild.me or guild.get_member(bot.user.id)) if guild and bot.user else None
         if perms and perms.send_messages and perms.attach_files:
@@ -1072,7 +1201,93 @@ async def _send_family_log(guild: discord.Guild, member=None, title='Log de Fam�
     except Exception:
         traceback.print_exc()
 
+# ==================== MONGO AUTO ====================
+def mongo_enabled():
+    return mongo_db is not None
 
+
+def init_mongo():
+    global mongo_client, mongo_db, mongo_families_current, mongo_families_backups, mongo_guild_settings
+    if not MongoClient:
+        print('[MONGO] PyMongo não disponível.')
+        return False
+    if not MONGODB_URI:
+        print('[MONGO] Variável MONGODB_URI não configurada.')
+        return False
+    try:
+        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=8000)
+        mongo_client.admin.command('ping')
+        mongo_db = mongo_client[MONGO_DB_NAME]
+        mongo_families_current = mongo_db['families_current']
+        mongo_families_backups = mongo_db['families_backups']
+        mongo_guild_settings = mongo_db['guild_settings']
+        mongo_families_current.create_index([('guild_id', 1), ('slug', 1)], unique=True)
+        mongo_families_backups.create_index([('guild_id', 1), ('created_at', -1)])
+        mongo_guild_settings.create_index([('guild_id', 1)], unique=True)
+        print('[MONGO] Conectado com sucesso.')
+        return True
+    except Exception as e:
+        print('[MONGO] Falha ao conectar:', e)
+        traceback.print_exc()
+        return False
+
+
+def mongo_sync_families_snapshot(full_data: dict):
+    if not mongo_enabled():
+        return
+    try:
+        now = datetime.utcnow()
+        for guild_key, bucket in full_data.items():
+            guild_id = int(guild_key)
+            _family_bucket(full_data, guild_id)
+            mongo_guild_settings.update_one(
+                {'guild_id': guild_id},
+                {'$set': {
+                    'guild_id': guild_id,
+                    'authorized_roles': bucket.get('authorized_roles', []),
+                    'authorized_users': bucket.get('authorized_users', []),
+                    'family_log_channel_id': bucket.get('family_log_channel_id'),
+                    'updated_at': now,
+                }},
+                upsert=True,
+            )
+            families = bucket.get('families', {})
+            current_slugs = list(families.keys())
+            if current_slugs:
+                mongo_families_current.delete_many({'guild_id': guild_id, 'slug': {'$nin': current_slugs}})
+            else:
+                mongo_families_current.delete_many({'guild_id': guild_id})
+            for slug, family in families.items():
+                mongo_families_current.update_one(
+                    {'guild_id': guild_id, 'slug': slug},
+                    {'$set': {
+                        'guild_id': guild_id,
+                        'slug': slug,
+                        'name': family.get('name'),
+                        'role_id': family.get('role_id'),
+                        'color': family.get('color'),
+                        'image_url': family.get('image_url', ''),
+                        'members': family.get('members', []),
+                        'leader_id': family.get('leader_id'),
+                        'created_by': family.get('created_by'),
+                        'created_at': family.get('created_at'),
+                        'updated_at': now,
+                    }},
+                    upsert=True,
+                )
+            mongo_families_backups.insert_one({
+                'guild_id': guild_id,
+                'kind': 'full_snapshot',
+                'families': families,
+                'authorized_roles': bucket.get('authorized_roles', []),
+                'authorized_users': bucket.get('authorized_users', []),
+                'family_log_channel_id': bucket.get('family_log_channel_id'),
+                'created_at': now,
+            })
+    except Exception:
+        traceback.print_exc()
+
+# ==================== OPERAÇÕES DE FAMÍLIA ====================
 async def _family_create(interaction: discord.Interaction, name: str, color_str: str):
     data = _family_db_load()
     bucket = _family_bucket(data, interaction.guild_id)
@@ -1181,7 +1396,7 @@ async def _family_send_invite(interaction: discord.Interaction, selected_slug: s
     pending[str(member.id)] = {
         'family_slug': selected_slug,
         'invited_by': interaction.user.id,
-        'created_at': datetime.utcnow().isoformat()
+        'created_at': datetime.utcnow().isoformat(),
     }
     _family_db_save(data)
     view = _FamilyInviteView(member.id, interaction.guild_id, selected_slug, interaction.user.id)
@@ -1194,7 +1409,7 @@ async def _family_send_invite(interaction: discord.Interaction, selected_slug: s
             f'**Cor:** `{family.get("color")}`\n\n'
             f'Deseja aceitar?'
         ),
-        int(family.get('color', '#7c5cff')[1:], 16)
+        int(family.get('color', '#7c5cff')[1:], 16),
     )
     if family.get('image_url'):
         embed.set_thumbnail(url=family['image_url'])
@@ -1207,8 +1422,7 @@ async def _family_send_invite(interaction: discord.Interaction, selected_slug: s
     await _send_family_log(interaction.guild, member=interaction.user, title='Convite de família enviado', reason=f'Família: {family.get("name")}', action=f'Convite enviado para {member}', message_text='Aguardando resposta na DM')
     return family
 
-
-# --------- PAINEL DE FAMÍLIAS ---------
+# Painel
 class _FamilyCreateModal(discord.ui.Modal, title='Criar Família'):
     family_name = discord.ui.TextInput(label='Nome da família', max_length=60, required=True)
     family_color = discord.ui.TextInput(label='Cor (#RRGGBB)', default='#7c5cff', max_length=7, required=False)
@@ -1362,8 +1576,8 @@ class _FamilyMemberUserSelect(discord.ui.UserSelect):
 class _FamilyPanelView(discord.ui.View):
     def __init__(self, interaction: discord.Interaction):
         super().__init__(timeout=300)
-        self.selected_slug: Optional[str] = None
-        self.selected_member_id: Optional[int] = None
+        self.selected_slug = None
+        self.selected_member_id = None
         self.add_item(_FamilySelect(self, interaction))
         self.add_item(_FamilyMemberUserSelect(self))
 
@@ -1511,12 +1725,10 @@ async def _family_name_autocomplete(interaction: discord.Interaction, current: s
     return out
 
 
-# --------- REGISTRO DOS SLASH COMMANDS ---------
-def _setup_family_system_integrated():
+def setup_family_system():
     if getattr(bot, '_family_system_v4_registered', False):
         return
     bot._family_system_v4_registered = True
-
     guild_obj = discord.Object(id=int(SEU_ID_DO_SERVIDOR))
     family_group = app_commands.Group(name='familia', description='Sistema de famílias do servidor')
 
@@ -1582,7 +1794,7 @@ def _setup_family_system_integrated():
 
     @family_group.command(name='criar', description='Cria uma nova família')
     @app_commands.describe(nome='Nome da família', cor='Cor da família em #RRGGBB')
-    async def familia_criar(interaction: discord.Interaction, nome: str, cor: Optional[str] = '#7c5cff'):
+    async def familia_criar(interaction: discord.Interaction, nome: str, cor: str | None = '#7c5cff'):
         try:
             family, role = await _family_create(interaction, nome, cor or '#7c5cff')
             await interaction.response.send_message(embed=_family_build_embed('✅ Família criada', f'**Nome:** {nome}\n**Cargo:** {role.mention}\n**Cor:** `{family["color"]}`\n**Líder:** {interaction.user.mention}', int(family['color'][1:], 16)), ephemeral=True)
@@ -1788,8 +2000,109 @@ def _setup_family_system_integrated():
 
     bot.add_listener(_family_on_ready_sync, 'on_ready')
 
+setup_family_system()
 
-_setup_family_system_integrated()
+# ==================== EVENTOS ====================
+@bot.event
+async def on_message(message):
+    try:
+        if message.author.bot:
+            return
+        if getattr(message, 'webhook_id', None) is not None:
+            return
+        if not message.content and message.embeds:
+            return
+
+        texto = message.content or ''
+
+        # auto-ban convite
+        invite_match = INVITE_REGEX.search(texto)
+        if invite_match and message.guild and BAN_AO_DETECTAR_CONVITE:
+            deleted_ok, deleted_reason = await try_delete_message(message)
+            dm_ok, dm_reason = await try_send_dm_warning(message.author, texto, getattr(message.channel, 'name', 'DM'), 'Convite/propaganda detectado')
+            ban_ok, ban_reason = await try_ban_member(message.guild, message.author, reason='Convite/propaganda detectado automaticamente')
+            await log(
+                message.guild,
+                member=message.author,
+                title='Ban automático por convite',
+                channel_name=getattr(message.channel, 'name', 'desconhecido'),
+                reason='Convite/propaganda detectado',
+                action=f'Delete: {deleted_ok} ({deleted_reason}) | DM: {dm_ok} ({dm_reason}) | Ban: {ban_ok} ({ban_reason})',
+                message_text=texto,
+                accent=(190, 72, 72),
+                target_channel_id=BAN_LOG_CHANNEL_ID,
+            )
+            return
+
+        # reações por palavra-chave
+        await _apply_keyword_reactions(message)
+
+        # respostas automáticas de contexto
+        decision = detect_auto_reply(message)
+        if decision:
+            cd = cooldown_status(message, decision['intent'])
+            if not cd['blocked']:
+                await message.reply(decision['reply'], mention_author=False)
+                remember_context(message, decision['intent'], decision['score'], decision['matched_groups'], decision['reply'])
+                mark_cooldown(message, decision['intent'])
+                await log(
+                    message.guild,
+                    member=message.author,
+                    title='Resposta automática',
+                    channel_name=getattr(message.channel, 'name', 'desconhecido'),
+                    reason=f"Intent: {decision['intent']} | Score: {decision['score']}",
+                    action='Resposta enviada',
+                    message_text=texto,
+                    accent=(88, 154, 255),
+                )
+                return
+
+        # respostas pessoais
+        is_dm = isinstance(message.channel, discord.DMChannel)
+        mentions_bot = bot.user in message.mentions if bot.user else False
+        should_respond_personal = is_dm or mentions_bot
+        if should_respond_personal:
+            if re.search(r'(agradecido|obg|obrigado)', texto, re.IGNORECASE) and _mentions_jeffu(message):
+                await message.reply('Não há de que <:amem:1466774899686117426>', mention_author=False)
+                return
+            if re.search(r'(te amo|amo vc|amo você|amo voce)', texto, re.IGNORECASE) and _mentions_jeffu(message):
+                await message.reply('💙 Obrigado... <:shame:1466777359586693376>', mention_author=False)
+                return
+            if BAD_WORDS_PATTERN.search(texto):
+                try:
+                    await message.reply('<:looking:1466793665463844894> Me deixa trabalhar, poxa...', mention_author=False)
+                except Exception:
+                    pass
+                return
+
+        await bot.process_commands(message)
+    except Exception as e:
+        print(f'Erro no on_message: {e}')
+        traceback.print_exc()
+
+
+@bot.event
+async def on_ready():
+    print(f'[BOT] Logado como {bot.user} (id: {bot.user.id})')
+    try:
+        _load_reaction_rules()
+        _ensure_default_rules_for_all_guilds()
+    except Exception as e:
+        print('[DEFAULT RULES WARN] Falha ao garantir regras padrão:', e)
+        traceback.print_exc()
+    try:
+        for guild in bot.guilds:
+            await audit_permission_status(guild)
+    except Exception:
+        traceback.print_exc()
+    try:
+        ok = init_mongo()
+        if ok:
+            data = _family_db_load()
+            if data:
+                mongo_sync_families_snapshot(data)
+    except Exception:
+        traceback.print_exc()
 
 
 TOKEN = os.getenv('DISCORD_TOKEN')
