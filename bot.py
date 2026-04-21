@@ -13,11 +13,9 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 try:
     import psycopg2
     from psycopg2.pool import ThreadedConnectionPool
-    from psycopg2.extras import Json
 except Exception:
     psycopg2 = None
     ThreadedConnectionPool = None
-    Json = None
 
 
 # ==================== CONFIG ====================
@@ -57,6 +55,8 @@ POSTGRES_CONNECT_TIMEOUT = int(os.getenv('PGCONNECT_TIMEOUT') or 10)
 POSTGRES_POOL_MIN = int(os.getenv('PG_POOL_MIN') or 1)
 POSTGRES_POOL_MAX = int(os.getenv('PG_POOL_MAX') or 5)
 POSTGRES_USERS_TABLE = os.getenv('PG_USERS_TABLE', 'discord_users').strip()
+POSTGRES_FAMILY_STATE_TABLE = os.getenv('PG_FAMILY_STATE_TABLE', 'family_state').strip()
+POSTGRES_FAMILY_SETTINGS_TABLE = os.getenv('PG_FAMILY_SETTINGS_TABLE', 'guild_family_settings').strip()
 POSTGRES_FAMILY_AUDIT_TABLE = os.getenv('PG_FAMILY_AUDIT_TABLE', 'family_audit_logs').strip()
 POSTGRES_SAVE_BOTS = str(os.getenv('PG_SAVE_BOTS', 'false')).lower() in ('1', 'true', 'yes', 'sim', 'on')
 
@@ -67,10 +67,10 @@ def _postgres_has_config() -> bool:
     return bool(POSTGRES_DSN or (POSTGRES_HOST and POSTGRES_DB and POSTGRES_USER and POSTGRES_PASSWORD))
 
 
-def _postgres_safe_table_name(name: str) -> str:
-    name = (name or 'discord_users').strip()
+def _postgres_safe_table_name(name: str, fallback='discord_users') -> str:
+    name = (name or fallback).strip()
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
-        return 'discord_users'
+        return fallback
     return name
 
 
@@ -118,11 +118,25 @@ def _postgres_get_pool():
 
 
 def _postgres_users_table() -> str:
-    return _postgres_safe_table_name(POSTGRES_USERS_TABLE)
+    return _postgres_safe_table_name(POSTGRES_USERS_TABLE, 'discord_users')
+
+
+def _postgres_family_state_table() -> str:
+    return _postgres_safe_table_name(POSTGRES_FAMILY_STATE_TABLE, 'family_state')
+
+
+def _postgres_family_settings_table() -> str:
+    return _postgres_safe_table_name(POSTGRES_FAMILY_SETTINGS_TABLE, 'guild_family_settings')
 
 
 def _postgres_family_audit_table() -> str:
-    return _postgres_safe_table_name(POSTGRES_FAMILY_AUDIT_TABLE)
+    return _postgres_safe_table_name(POSTGRES_FAMILY_AUDIT_TABLE, 'family_audit_logs')
+
+
+def _pg_json(value, default):
+    if value is None:
+        value = default
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _postgres_init_sync() -> bool:
@@ -137,6 +151,8 @@ def _postgres_init_sync() -> bool:
         return False
     conn = None
     users_table = _postgres_users_table()
+    family_state_table = _postgres_family_state_table()
+    family_settings_table = _postgres_family_settings_table()
     audit_table = _postgres_family_audit_table()
     try:
         conn = pool.getconn()
@@ -161,6 +177,32 @@ def _postgres_init_sync() -> bool:
             ''')
             cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{users_table}_user_id ON {users_table} (user_id)')
             cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{users_table}_last_seen_at ON {users_table} (last_seen_at DESC)')
+            cur.execute(f'''                CREATE TABLE IF NOT EXISTS {family_settings_table} (
+                    guild_id BIGINT PRIMARY KEY,
+                    authorized_roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    authorized_users JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    pending_invites JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                    family_log_channel_id BIGINT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ''')
+            cur.execute(f'''                CREATE TABLE IF NOT EXISTS {family_state_table} (
+                    guild_id BIGINT NOT NULL,
+                    slug TEXT NOT NULL,
+                    name TEXT,
+                    role_id BIGINT,
+                    color TEXT,
+                    image_url TEXT,
+                    members JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    leader_id BIGINT,
+                    created_by BIGINT,
+                    created_at_text TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (guild_id, slug)
+                )
+            ''')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{family_state_table}_guild_id ON {family_state_table} (guild_id)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{family_state_table}_leader_id ON {family_state_table} (leader_id)')
             cur.execute(f'''                CREATE TABLE IF NOT EXISTS {audit_table} (
                     id BIGSERIAL PRIMARY KEY,
                     guild_id BIGINT NOT NULL,
@@ -180,7 +222,7 @@ def _postgres_init_sync() -> bool:
             cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{audit_table}_family_slug ON {audit_table} (family_slug)')
             cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{audit_table}_action ON {audit_table} (action)')
             cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{audit_table}_created_at ON {audit_table} (created_at DESC)')
-        print(f'[POSTGRES] Tabelas `{users_table}` e `{audit_table}` prontas para uso.')
+        print(f'[POSTGRES] Tabelas `{users_table}`, `{family_settings_table}`, `{family_state_table}` e `{audit_table}` prontas para uso.')
         return True
     except Exception as e:
         print(f'[POSTGRES] Falha ao criar tabelas: {e}')
@@ -282,22 +324,111 @@ async def postgres_save_member(member: discord.abc.User, guild: discord.Guild | 
     return saved > 0
 
 
-async def postgres_sync_guild_members(guild: discord.Guild) -> int:
-    payloads = [_member_payload(member, guild) for member in getattr(guild, 'members', [])]
-    payloads = [item for item in payloads if item]
-    if not payloads:
-        return 0
-    return await asyncio.to_thread(_postgres_upsert_users_sync, payloads)
-
-
 async def postgres_sync_all_guilds() -> int:
     total = 0
     for guild in bot.guilds:
+        payloads = [_member_payload(member, guild) for member in getattr(guild, 'members', [])]
+        payloads = [item for item in payloads if item]
+        if not payloads:
+            continue
         try:
-            total += await postgres_sync_guild_members(guild)
+            total += await asyncio.to_thread(_postgres_upsert_users_sync, payloads)
         except Exception:
             traceback.print_exc()
     return total
+
+
+def _postgres_sync_families_snapshot_sync(full_data: dict) -> int:
+    if not full_data or not postgres_enabled():
+        return 0
+    pool = _postgres_get_pool()
+    if pool is None:
+        return 0
+    conn = None
+    family_state_table = _postgres_family_state_table()
+    family_settings_table = _postgres_family_settings_table()
+    total_families = 0
+    try:
+        conn = pool.getconn()
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            for guild_key, bucket in list(full_data.items()):
+                guild_id = int(guild_key)
+                bucket = _family_bucket(full_data, guild_id)
+                cur.execute(
+                    f'''                    INSERT INTO {family_settings_table} (
+                        guild_id, authorized_roles, authorized_users, pending_invites, family_log_channel_id, updated_at
+                    )
+                    VALUES (%s, %s::jsonb, %s::jsonb, %s::jsonb, %s, NOW())
+                    ON CONFLICT (guild_id) DO UPDATE SET
+                        authorized_roles = EXCLUDED.authorized_roles,
+                        authorized_users = EXCLUDED.authorized_users,
+                        pending_invites = EXCLUDED.pending_invites,
+                        family_log_channel_id = EXCLUDED.family_log_channel_id,
+                        updated_at = NOW()
+                    ''',
+                    (
+                        guild_id,
+                        _pg_json(bucket.get('authorized_roles', []), []),
+                        _pg_json(bucket.get('authorized_users', []), []),
+                        _pg_json(bucket.get('pending_invites', {}), {}),
+                        bucket.get('family_log_channel_id'),
+                    ),
+                )
+                families = bucket.get('families', {})
+                current_slugs = list(families.keys())
+                if current_slugs:
+                    placeholders = ', '.join(['%s'] * len(current_slugs))
+                    cur.execute(
+                        f'DELETE FROM {family_state_table} WHERE guild_id = %s AND slug NOT IN ({placeholders})',
+                        [guild_id, *current_slugs],
+                    )
+                else:
+                    cur.execute(f'DELETE FROM {family_state_table} WHERE guild_id = %s', (guild_id,))
+                for slug, family in families.items():
+                    cur.execute(
+                        f'''                        INSERT INTO {family_state_table} (
+                            guild_id, slug, name, role_id, color, image_url, members, leader_id, created_by, created_at_text, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW())
+                        ON CONFLICT (guild_id, slug) DO UPDATE SET
+                            name = EXCLUDED.name,
+                            role_id = EXCLUDED.role_id,
+                            color = EXCLUDED.color,
+                            image_url = EXCLUDED.image_url,
+                            members = EXCLUDED.members,
+                            leader_id = EXCLUDED.leader_id,
+                            created_by = EXCLUDED.created_by,
+                            created_at_text = EXCLUDED.created_at_text,
+                            updated_at = NOW()
+                        ''',
+                        (
+                            guild_id,
+                            slug,
+                            family.get('name'),
+                            family.get('role_id'),
+                            family.get('color'),
+                            family.get('image_url', ''),
+                            _pg_json(family.get('members', []), []),
+                            family.get('leader_id'),
+                            family.get('created_by'),
+                            family.get('created_at'),
+                        ),
+                    )
+                    total_families += 1
+        return total_families
+    except Exception as e:
+        print(f'[POSTGRES] Falha ao sincronizar famílias: {e}')
+        traceback.print_exc()
+        return 0
+    finally:
+        if conn is not None and pool is not None:
+            pool.putconn(conn)
+
+
+async def postgres_sync_families_snapshot(full_data: dict) -> int:
+    snapshot = json.loads(json.dumps(full_data or {}, ensure_ascii=False, default=str))
+    return await asyncio.to_thread(_postgres_sync_families_snapshot_sync, snapshot)
 
 
 def _display_label(obj) -> str | None:
@@ -316,6 +447,29 @@ def _family_audit_payload(family=None):
     return None, str(family)
 
 
+def _guess_family_audit_action(title: str, action_text: str = '', reason_text: str = '') -> str:
+    title_l = (title or '').lower()
+    if 'criada' in title_l:
+        return 'family_created'
+    if 'enviado' in title_l and 'convite' in title_l:
+        return 'invite_sent'
+    if 'aceito' in title_l and 'convite' in title_l:
+        return 'invite_accepted'
+    if 'recusado' in title_l and 'convite' in title_l:
+        return 'invite_declined'
+    if 'renomeada' in title_l:
+        return 'family_renamed'
+    if 'cor' in title_l and 'alterada' in title_l:
+        return 'family_color_updated'
+    if 'foto' in title_l and 'alterada' in title_l:
+        return 'family_photo_updated'
+    if 'removido' in title_l:
+        return 'member_removed'
+    if 'deletada' in title_l:
+        return 'family_deleted'
+    return 'family_log'
+
+
 def _postgres_log_family_action_sync(action: str, guild: discord.Guild, actor=None, family=None, target=None, details=None) -> bool:
     if not action or guild is None or not postgres_enabled():
         return False
@@ -325,30 +479,31 @@ def _postgres_log_family_action_sync(action: str, guild: discord.Guild, actor=No
     conn = None
     table = _postgres_family_audit_table()
     family_slug, family_name = _family_audit_payload(family)
-    details_payload = json.dumps(details or {}, ensure_ascii=False, default=str)
-    sql = f'''        INSERT INTO {table} (
-            guild_id, guild_name, family_slug, family_name, action,
-            actor_id, actor_name, target_id, target_name, details
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-    '''
-    params = (
-        int(guild.id),
-        getattr(guild, 'name', None),
-        family_slug,
-        family_name,
-        action,
-        int(getattr(actor, 'id', 0) or 0) or None,
-        _display_label(actor),
-        int(getattr(target, 'id', 0) or 0) or None,
-        _display_label(target),
-        details_payload,
-    )
+    details_payload = _pg_json(details or {}, {})
     try:
         conn = pool.getconn()
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute(sql, params)
+            cur.execute(
+                f'''                INSERT INTO {table} (
+                    guild_id, guild_name, family_slug, family_name, action,
+                    actor_id, actor_name, target_id, target_name, details
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                ''',
+                (
+                    int(guild.id),
+                    getattr(guild, 'name', None),
+                    family_slug,
+                    family_name,
+                    action,
+                    int(getattr(actor, 'id', 0) or 0) or None,
+                    _display_label(actor),
+                    int(getattr(target, 'id', 0) or 0) or None,
+                    _display_label(target),
+                    details_payload,
+                ),
+            )
         return True
     except Exception as e:
         print(f'[POSTGRES] Falha ao auditar ação de família: {e}')
@@ -1257,6 +1412,16 @@ def _family_db_load() -> dict:
 def _family_db_save(data: dict):
     with open(FAMILIAS_DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    try:
+        if postgres_enabled():
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                _postgres_sync_families_snapshot_sync(data)
+            else:
+                loop.create_task(postgres_sync_families_snapshot(data))
+    except Exception:
+        traceback.print_exc()
 
 
 def _family_slug(text: str) -> str:
@@ -1504,42 +1669,12 @@ async def _build_family_log_image(guild, member=None, title='Log de Família', r
     return bio
 
 
-
-def _guess_family_audit_action(title: str, action_text: str = '', reason_text: str = '') -> str:
-    title_l = (title or '').lower()
-    action_l = (action_text or '').lower()
-    reason_l = (reason_text or '').lower()
-    if 'criada' in title_l:
-        return 'family_created'
-    if 'enviado' in title_l and 'convite' in title_l:
-        return 'invite_sent'
-    if 'aceito' in title_l and 'convite' in title_l:
-        return 'invite_accepted'
-    if 'recusado' in title_l and 'convite' in title_l:
-        return 'invite_declined'
-    if 'renomeada' in title_l:
-        return 'family_renamed'
-    if 'cor de família alterada' in title_l:
-        return 'family_color_updated'
-    if 'foto de família alterada' in title_l:
-        return 'family_photo_updated'
-    if 'removido' in title_l:
-        return 'member_removed'
-    if 'deletada' in title_l:
-        return 'family_deleted'
-    if 'líder' in title_l:
-        return 'family_leader_updated'
-    if 'criada' in action_l or 'criada' in reason_l:
-        return 'family_created'
-    return 'family_log'
-
-
 async def _send_family_log(guild: discord.Guild, member=None, title='Log de Família', reason='', action='', message_text='', audit_action=None, family=None, target=None, details=None):
-    details_payload = dict(details or {})
-    details_payload.setdefault('title', title)
-    details_payload.setdefault('reason', reason)
-    details_payload.setdefault('action_text', action)
-    details_payload.setdefault('message_text', message_text)
+    payload = dict(details or {})
+    payload.setdefault('title', title)
+    payload.setdefault('reason', reason)
+    payload.setdefault('action_text', action)
+    payload.setdefault('message_text', message_text)
     try:
         if guild:
             await postgres_log_family_action(
@@ -1548,7 +1683,7 @@ async def _send_family_log(guild: discord.Guild, member=None, title='Log de Fam�
                 actor=member,
                 family=family,
                 target=target,
-                details=details_payload,
+                details=payload,
             )
     except Exception:
         traceback.print_exc()
@@ -1567,7 +1702,6 @@ async def _send_family_log(guild: discord.Guild, member=None, title='Log de Fam�
             await canal.send(file=discord.File(fp=image_bytes, filename='family_log.png'))
     except Exception:
         traceback.print_exc()
-
 
 # ==================== OPERAÇÕES DE FAMÍLIA ====================
 async def _family_create(interaction: discord.Interaction, name: str, color_str: str):
@@ -1598,7 +1732,7 @@ async def _family_create(interaction: discord.Interaction, name: str, color_str:
         except Exception:
             traceback.print_exc()
     _family_db_save(data)
-    await _send_family_log(interaction.guild, member=interaction.user, title='Família criada', reason=f'Família {name} criada', action=f'Cargo criado: {role.name}', message_text=f'Cor: {hex_color}', audit_action='family_created', family={'slug': slug, 'name': name}, details={'color': hex_color, 'role_id': role.id})
+    await _send_family_log(interaction.guild, member=interaction.user, title='Família criada', reason=f'Família {name} criada', action=f'Cargo criado: {role.name}', message_text=f'Cor: {hex_color}')
     return family, role
 
 
@@ -1640,7 +1774,7 @@ class _FamilyInviteView(discord.ui.View):
             await member.add_roles(role, reason=f'Convite aceito para a família {family.get("name")}')
         bucket['pending_invites'].pop(str(self.invited_user_id), None)
         _family_db_save(data)
-        await _send_family_log(guild, member=member, title='Convite de família aceito', reason=f'Família: {family.get("name")}', action='Usuário aceitou o convite', message_text='Convite aceito via DM', audit_action='invite_accepted', family={'slug': self.family_slug, 'name': family.get('name')}, details={'invited_by_id': invite.get('invited_by')})
+        await _send_family_log(guild, member=member, title='Convite de família aceito', reason=f'Família: {family.get("name")}', action='Usuário aceitou o convite', message_text='Convite aceito via DM')
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content=f'✅ Você entrou na família **{family.get("name")}**.', view=self)
@@ -1655,7 +1789,7 @@ class _FamilyInviteView(discord.ui.View):
         _family_db_save(data)
         guild = bot.get_guild(self.guild_id)
         if guild:
-            await _send_family_log(guild, member=interaction.user, title='Convite de família recusado', reason='Convite recusado', action=f'Família slug: {self.family_slug}', message_text='Convite recusado via DM', audit_action='invite_declined', family={'slug': self.family_slug, 'name': None})
+            await _send_family_log(guild, member=interaction.user, title='Convite de família recusado', reason='Convite recusado', action=f'Família slug: {self.family_slug}', message_text='Convite recusado via DM')
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content='❌ Você recusou o convite.', view=self)
@@ -1701,7 +1835,7 @@ async def _family_send_invite(interaction: discord.Interaction, selected_slug: s
         pending.pop(str(member.id), None)
         _family_db_save(data)
         raise ValueError('Não foi possível enviar a DM. O usuário está com DMs fechadas.')
-    await _send_family_log(interaction.guild, member=interaction.user, title='Convite de família enviado', reason=f'Família: {family.get("name")}', action=f'Convite enviado para {member}', message_text='Aguardando resposta na DM', audit_action='invite_sent', family={'slug': selected_slug, 'name': family.get('name')}, target=member)
+    await _send_family_log(interaction.guild, member=interaction.user, title='Convite de família enviado', reason=f'Família: {family.get("name")}', action=f'Convite enviado para {member}', message_text='Aguardando resposta na DM')
     return family
 
 # Painel
@@ -1749,7 +1883,7 @@ class _FamilyRenameModal(discord.ui.Modal, title='Renomear Família'):
             bucket['families'].pop(slug)
             bucket['families'][new_slug] = family
         _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família renomeada', reason='Nome alterado', action=f'{old_name} → {self.new_name.value}', message_text='', audit_action='family_renamed', family={'slug': self.parent_view.selected_slug, 'name': self.new_name.value}, details={'old_name': old_name, 'new_name': self.new_name.value})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Família renomeada', reason='Nome alterado', action=f'{old_name} → {self.new_name.value}', message_text='')
         await interaction.response.send_message(f'✅ Família renomeada para **{self.new_name.value}**.', ephemeral=True)
 
 
@@ -1777,7 +1911,7 @@ class _FamilyColorModal(discord.ui.Modal, title='Alterar Cor da Família'):
             await role.edit(colour=discord_color, reason=f'Cor da família alterada por {interaction.user}')
         family['color'] = hex_color
         _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Cor de família alterada', reason=f'Família: {family.get("name")}', action=f'Nova cor: {hex_color}', message_text='', audit_action='family_color_updated', family={'slug': self.parent_view.selected_slug, 'name': family.get('name')}, details={'color': hex_color})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Cor de família alterada', reason=f'Família: {family.get("name")}', action=f'Nova cor: {hex_color}', message_text='')
         await interaction.response.send_message(f'✅ Cor da família **{family.get("name")}** alterada para `{hex_color}`.', ephemeral=True)
 
 
@@ -1799,7 +1933,7 @@ class _FamilyPhotoModal(discord.ui.Modal, title='Alterar Foto da Família'):
         url = str(self.photo_url.value).strip()
         family['image_url'] = url
         _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Foto de família alterada', reason=f'Família: {family.get("name")}', action='Foto atualizada', message_text=url, audit_action='family_photo_updated', family={'slug': self.parent_view.selected_slug, 'name': family.get('name')}, details={'image_url': url})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Foto de família alterada', reason=f'Família: {family.get("name")}', action='Foto atualizada', message_text=url)
         await interaction.response.send_message(f'✅ Foto da família **{family.get("name")}** atualizada.', ephemeral=True)
 
 
@@ -1943,7 +2077,7 @@ class _FamilyPanelView(discord.ui.View):
             if role and role in member.roles:
                 await member.remove_roles(role, reason=f'Removido da família {family.get("name")}')
             _family_db_save(data)
-            await _send_family_log(interaction.guild, member=interaction.user, title='Membro removido da família', reason=f'Família: {family.get("name")}', action=f'Membro removido: {member}', message_text='', audit_action='member_removed', family={'slug': self.selected_slug, 'name': family.get('name')}, target=member)
+            await _send_family_log(interaction.guild, member=interaction.user, title='Membro removido da família', reason=f'Família: {family.get("name")}', action=f'Membro removido: {member}', message_text='')
             embed = _family_build_details_embed(interaction.guild, family, member)
             await interaction.response.edit_message(embed=embed, view=self)
             await interaction.followup.send(f'✅ {member.mention} foi removido da família **{family.get("name")}**.', ephemeral=True)
@@ -1984,7 +2118,7 @@ class _FamilyPanelView(discord.ui.View):
         bucket['families'].pop(slug, None)
         _family_db_save(data)
         self.selected_slug = None
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família deletada', reason=f'Família removida: {family.get("name")}', action='Cargo e registro apagados', message_text='', audit_action='family_deleted', family={'slug': self.selected_slug, 'name': family.get('name')})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Família deletada', reason=f'Família removida: {family.get("name")}', action='Cargo e registro apagados', message_text='')
         await interaction.response.send_message(f'🗑️ Família **{family.get("name")}** deletada com sucesso.', ephemeral=True)
 
     @discord.ui.button(label='❓ Ajuda', style=discord.ButtonStyle.secondary, row=4)
@@ -2135,7 +2269,7 @@ def setup_family_system():
             bucket['families'].pop(slug)
             bucket['families'][new_slug] = family
         _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família renomeada', reason='Nome alterado', action=f'{old_name} → {novo_nome}', message_text='', audit_action='family_renamed', family={'slug': slug, 'name': novo_nome}, details={'old_name': old_name, 'new_name': novo_nome})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Família renomeada', reason='Nome alterado', action=f'{old_name} → {novo_nome}', message_text='')
         await interaction.response.send_message(f'✅ Família renomeada para **{novo_nome}**.', ephemeral=True)
 
     @family_group.command(name='cor', description='Altera a cor da família e do cargo')
@@ -2158,7 +2292,7 @@ def setup_family_system():
             await role.edit(colour=discord_color, reason=f'Cor da família alterada por {interaction.user}')
         family['color'] = hex_color
         _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Cor de família alterada', reason=f'Família: {family.get("name")}', action=f'Nova cor: {hex_color}', message_text='', audit_action='family_color_updated', family={'slug': self.parent_view.selected_slug, 'name': family.get('name')}, details={'color': hex_color})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Cor de família alterada', reason=f'Família: {family.get("name")}', action=f'Nova cor: {hex_color}', message_text='')
         await interaction.response.send_message(f'✅ Cor da família **{family.get("name")}** alterada para `{hex_color}`.', ephemeral=True)
 
     @family_group.command(name='foto', description='Altera a foto da família por URL')
@@ -2174,7 +2308,7 @@ def setup_family_system():
             return await interaction.response.send_message('Você não pode alterar a foto dessa família.', ephemeral=True)
         family['image_url'] = url
         _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Foto de família alterada', reason=f'Família: {family.get("name")}', action='Foto atualizada', message_text=url, audit_action='family_photo_updated', family={'slug': self.parent_view.selected_slug, 'name': family.get('name')}, details={'image_url': url})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Foto de família alterada', reason=f'Família: {family.get("name")}', action='Foto atualizada', message_text=url)
         await interaction.response.send_message(f'✅ Foto da família **{family.get("name")}** atualizada.', ephemeral=True)
 
     @family_group.command(name='add', description='Convida um membro para a família')
@@ -2239,7 +2373,7 @@ def setup_family_system():
                 traceback.print_exc()
         bucket['families'].pop(slug, None)
         _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família deletada', reason=f'Família removida: {family.get("name")}', action='Cargo e registro apagados', message_text='', audit_action='family_deleted', family={'slug': self.selected_slug, 'name': family.get('name')})
+        await _send_family_log(interaction.guild, member=interaction.user, title='Família deletada', reason=f'Família removida: {family.get("name")}', action='Cargo e registro apagados', message_text='')
         await interaction.response.send_message(f'🗑️ Família **{family.get("name")}** deletada com sucesso.', ephemeral=True)
 
     @family_group.command(name='sync', description='Sincroniza membros e cargo da família')
@@ -2375,8 +2509,10 @@ async def on_ready():
     try:
         ok = await postgres_init()
         if ok:
-            total = await postgres_sync_all_guilds()
-            print(f'[POSTGRES] Sincronização inicial concluída: {total} usuário(s).')
+            total_users = await postgres_sync_all_guilds()
+            data = _family_db_load()
+            total_families = await postgres_sync_families_snapshot(data)
+            print(f'[POSTGRES] Sincronização inicial concluída: {total_users} usuário(s) e {total_families} família(s).')
     except Exception as e:
         print(f'[POSTGRES] Falha na inicialização/sincronização: {e}')
         traceback.print_exc()
