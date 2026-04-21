@@ -2,7 +2,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os, re, json, time, traceback, unicodedata
+import os, re, json, time, traceback, unicodedata, asyncio
 from pathlib import Path
 from collections import defaultdict, deque
 from io import BytesIO
@@ -11,9 +11,12 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 try:
-    from pymongo import MongoClient
+    import psycopg2
+    from psycopg2.pool import ThreadedConnectionPool
 except Exception:
-    MongoClient = None
+    psycopg2 = None
+    ThreadedConnectionPool = None
+
 
 # ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
@@ -35,14 +38,252 @@ CONTEXT_MAX_AGE_SECONDS = 180
 INVITE_REGEX = re.compile(r'(discord(?:\.gg|\.com/invite|app\.com/invite)/[A-Za-z0-9\-]+)', re.IGNORECASE)
 BAD_WORDS_PATTERN = re.compile(r'\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?', re.IGNORECASE)
 
-# Mongo automático
-MONGODB_URI = os.getenv('MONGODB_URI')
-MONGO_DB_NAME = os.getenv('MONGO_DB_NAME', 'scanbot')
-mongo_client = None
-mongo_db = None
-mongo_families_current = None
-mongo_families_backups = None
-mongo_guild_settings = None
+# Persistência em PostgreSQL (Railway) para usuários
+POSTGRES_DSN = (
+    os.getenv('DATABASE_URL')
+    or os.getenv('POSTGRES_URL')
+    or os.getenv('POSTGRESQL_URL')
+)
+POSTGRES_HOST = os.getenv('PGHOST') or os.getenv('POSTGRES_HOST')
+POSTGRES_PORT = int(os.getenv('PGPORT') or os.getenv('POSTGRES_PORT') or 5432)
+POSTGRES_DB = os.getenv('PGDATABASE') or os.getenv('POSTGRES_DB')
+POSTGRES_USER = os.getenv('PGUSER') or os.getenv('POSTGRES_USER')
+POSTGRES_PASSWORD = os.getenv('PGPASSWORD') or os.getenv('POSTGRES_PASSWORD')
+POSTGRES_SSLMODE = os.getenv('PGSSLMODE') or ('require' if POSTGRES_DSN or POSTGRES_HOST else 'prefer')
+POSTGRES_CONNECT_TIMEOUT = int(os.getenv('PGCONNECT_TIMEOUT') or 10)
+POSTGRES_POOL_MIN = int(os.getenv('PG_POOL_MIN') or 1)
+POSTGRES_POOL_MAX = int(os.getenv('PG_POOL_MAX') or 5)
+POSTGRES_USERS_TABLE = os.getenv('PG_USERS_TABLE', 'discord_users').strip()
+POSTGRES_SAVE_BOTS = str(os.getenv('PG_SAVE_BOTS', 'false')).lower() in ('1', 'true', 'yes', 'sim', 'on')
+
+_postgres_pool = None
+
+
+def _postgres_has_config() -> bool:
+    return bool(POSTGRES_DSN or (POSTGRES_HOST and POSTGRES_DB and POSTGRES_USER and POSTGRES_PASSWORD))
+
+
+def _postgres_safe_table_name(name: str) -> str:
+    name = (name or 'discord_users').strip()
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+        return 'discord_users'
+    return name
+
+
+def _postgres_connect_kwargs() -> dict:
+    if POSTGRES_DSN:
+        dsn = POSTGRES_DSN
+        if 'sslmode=' not in dsn:
+            separator = '&' if '?' in dsn else '?'
+            dsn = f'{dsn}{separator}sslmode={POSTGRES_SSLMODE}'
+        return {
+            'dsn': dsn,
+            'connect_timeout': POSTGRES_CONNECT_TIMEOUT,
+            'application_name': 'scanbot',
+        }
+    return {
+        'host': POSTGRES_HOST,
+        'port': POSTGRES_PORT,
+        'dbname': POSTGRES_DB,
+        'user': POSTGRES_USER,
+        'password': POSTGRES_PASSWORD,
+        'sslmode': POSTGRES_SSLMODE,
+        'connect_timeout': POSTGRES_CONNECT_TIMEOUT,
+        'application_name': 'scanbot',
+    }
+
+
+def postgres_enabled() -> bool:
+    return psycopg2 is not None and _postgres_has_config()
+
+
+def _postgres_get_pool():
+    global _postgres_pool
+    if _postgres_pool is not None:
+        return _postgres_pool
+    if not postgres_enabled():
+        return None
+    try:
+        kwargs = _postgres_connect_kwargs()
+        _postgres_pool = ThreadedConnectionPool(POSTGRES_POOL_MIN, POSTGRES_POOL_MAX, **kwargs)
+        return _postgres_pool
+    except Exception as e:
+        print(f'[POSTGRES] Falha ao criar pool: {e}')
+        traceback.print_exc()
+        return None
+
+
+def _postgres_users_table() -> str:
+    return _postgres_safe_table_name(POSTGRES_USERS_TABLE)
+
+
+def _postgres_init_sync() -> bool:
+    if not postgres_enabled():
+        if psycopg2 is None:
+            print('[POSTGRES] psycopg2 não está instalado. Adicione psycopg2-binary ao projeto.')
+        else:
+            print('[POSTGRES] Banco não configurado. Defina DATABASE_URL ou variáveis PG* do Railway.')
+        return False
+    pool = _postgres_get_pool()
+    if pool is None:
+        return False
+    conn = None
+    table = _postgres_users_table()
+    try:
+        conn = pool.getconn()
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f'''                CREATE TABLE IF NOT EXISTS {table} (
+                    guild_id BIGINT NOT NULL,
+                    guild_name TEXT,
+                    user_id BIGINT NOT NULL,
+                    username TEXT NOT NULL,
+                    global_name TEXT,
+                    display_name TEXT,
+                    discriminator TEXT,
+                    is_bot BOOLEAN NOT NULL DEFAULT FALSE,
+                    avatar_url TEXT,
+                    joined_at TIMESTAMPTZ NULL,
+                    created_discord_at TIMESTAMPTZ NULL,
+                    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (guild_id, user_id)
+                )
+            ''')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_user_id ON {table} (user_id)')
+            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_last_seen_at ON {table} (last_seen_at DESC)')
+        print(f'[POSTGRES] Tabela `{table}` pronta para uso.')
+        return True
+    except Exception as e:
+        print(f'[POSTGRES] Falha ao criar tabela de usuários: {e}')
+        traceback.print_exc()
+        return False
+    finally:
+        if conn is not None and pool is not None:
+            pool.putconn(conn)
+
+
+async def postgres_init() -> bool:
+    return await asyncio.to_thread(_postgres_init_sync)
+
+
+def _member_payload(member: discord.abc.User, guild: discord.Guild | None = None) -> dict | None:
+    if member is None:
+        return None
+    guild = guild or getattr(member, 'guild', None)
+    if guild is None:
+        return None
+    is_bot = bool(getattr(member, 'bot', False))
+    if is_bot and not POSTGRES_SAVE_BOTS:
+        return None
+    avatar_url = None
+    try:
+        avatar_url = str(member.display_avatar.url)
+    except Exception:
+        avatar_url = None
+    joined_at = getattr(member, 'joined_at', None)
+    created_at = getattr(member, 'created_at', None)
+    return {
+        'guild_id': int(guild.id),
+        'guild_name': getattr(guild, 'name', None),
+        'user_id': int(member.id),
+        'username': getattr(member, 'name', None) or str(member),
+        'global_name': getattr(member, 'global_name', None),
+        'display_name': getattr(member, 'display_name', None) or getattr(member, 'name', None) or str(member),
+        'discriminator': getattr(member, 'discriminator', None),
+        'is_bot': is_bot,
+        'avatar_url': avatar_url,
+        'joined_at': joined_at,
+        'created_discord_at': created_at,
+    }
+
+
+def _postgres_upsert_users_sync(payloads: list[dict]) -> int:
+    if not payloads or not postgres_enabled():
+        return 0
+    pool = _postgres_get_pool()
+    if pool is None:
+        return 0
+    conn = None
+    table = _postgres_users_table()
+    sql = f'''        INSERT INTO {table} (
+            guild_id, guild_name, user_id, username, global_name, display_name,
+            discriminator, is_bot, avatar_url, joined_at, created_discord_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (guild_id, user_id) DO UPDATE SET
+            guild_name = EXCLUDED.guild_name,
+            username = EXCLUDED.username,
+            global_name = EXCLUDED.global_name,
+            display_name = EXCLUDED.display_name,
+            discriminator = EXCLUDED.discriminator,
+            is_bot = EXCLUDED.is_bot,
+            avatar_url = EXCLUDED.avatar_url,
+            joined_at = COALESCE(EXCLUDED.joined_at, {table}.joined_at),
+            created_discord_at = COALESCE(EXCLUDED.created_discord_at, {table}.created_discord_at),
+            last_seen_at = NOW()
+    '''
+    rows = [
+        (
+            item['guild_id'],
+            item['guild_name'],
+            item['user_id'],
+            item['username'],
+            item['global_name'],
+            item['display_name'],
+            item['discriminator'],
+            item['is_bot'],
+            item['avatar_url'],
+            item['joined_at'],
+            item['created_discord_at'],
+        )
+        for item in payloads if item
+    ]
+    if not rows:
+        return 0
+    try:
+        conn = pool.getconn()
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.executemany(sql, rows)
+        return len(rows)
+    except Exception as e:
+        print(f'[POSTGRES] Falha ao salvar usuários: {e}')
+        traceback.print_exc()
+        return 0
+    finally:
+        if conn is not None and pool is not None:
+            pool.putconn(conn)
+
+
+async def postgres_save_member(member: discord.abc.User, guild: discord.Guild | None = None) -> bool:
+    payload = _member_payload(member, guild)
+    if payload is None:
+        return False
+    saved = await asyncio.to_thread(_postgres_upsert_users_sync, [payload])
+    return saved > 0
+
+
+async def postgres_sync_guild_members(guild: discord.Guild) -> int:
+    payloads = [_member_payload(member, guild) for member in getattr(guild, 'members', [])]
+    payloads = [item for item in payloads if item]
+    if not payloads:
+        return 0
+    return await asyncio.to_thread(_postgres_upsert_users_sync, payloads)
+
+
+async def postgres_sync_all_guilds() -> int:
+    total = 0
+    for guild in bot.guilds:
+        try:
+            saved = await postgres_sync_guild_members(guild)
+            total += saved
+            print(f'[POSTGRES] {saved} usuário(s) sincronizado(s) em {guild.name}.')
+        except Exception as e:
+            print(f'[POSTGRES] Falha ao sincronizar membros de {guild.name}: {e}')
+            traceback.print_exc()
+    return total
+
 
 # intents/bot
 intents = discord.Intents.default()
@@ -936,7 +1177,6 @@ def _family_db_load() -> dict:
 def _family_db_save(data: dict):
     with open(FAMILIAS_DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    mongo_sync_families_snapshot(data)
 
 
 def _family_slug(text: str) -> str:
@@ -1198,92 +1438,6 @@ async def _send_family_log(guild: discord.Guild, member=None, title='Log de Fam�
         if perms and perms.send_messages and perms.attach_files:
             image_bytes = await _build_family_log_image(guild, member=member, title=title, reason=reason, action=action, message_text=message_text)
             await canal.send(file=discord.File(fp=image_bytes, filename='family_log.png'))
-    except Exception:
-        traceback.print_exc()
-
-# ==================== MONGO AUTO ====================
-def mongo_enabled():
-    return mongo_db is not None
-
-
-def init_mongo():
-    global mongo_client, mongo_db, mongo_families_current, mongo_families_backups, mongo_guild_settings
-    if not MongoClient:
-        print('[MONGO] PyMongo não disponível.')
-        return False
-    if not MONGODB_URI:
-        print('[MONGO] Variável MONGODB_URI não configurada.')
-        return False
-    try:
-        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=8000)
-        mongo_client.admin.command('ping')
-        mongo_db = mongo_client[MONGO_DB_NAME]
-        mongo_families_current = mongo_db['families_current']
-        mongo_families_backups = mongo_db['families_backups']
-        mongo_guild_settings = mongo_db['guild_settings']
-        mongo_families_current.create_index([('guild_id', 1), ('slug', 1)], unique=True)
-        mongo_families_backups.create_index([('guild_id', 1), ('created_at', -1)])
-        mongo_guild_settings.create_index([('guild_id', 1)], unique=True)
-        print('[MONGO] Conectado com sucesso.')
-        return True
-    except Exception as e:
-        print('[MONGO] Falha ao conectar:', e)
-        traceback.print_exc()
-        return False
-
-
-def mongo_sync_families_snapshot(full_data: dict):
-    if not mongo_enabled():
-        return
-    try:
-        now = datetime.utcnow()
-        for guild_key, bucket in full_data.items():
-            guild_id = int(guild_key)
-            _family_bucket(full_data, guild_id)
-            mongo_guild_settings.update_one(
-                {'guild_id': guild_id},
-                {'$set': {
-                    'guild_id': guild_id,
-                    'authorized_roles': bucket.get('authorized_roles', []),
-                    'authorized_users': bucket.get('authorized_users', []),
-                    'family_log_channel_id': bucket.get('family_log_channel_id'),
-                    'updated_at': now,
-                }},
-                upsert=True,
-            )
-            families = bucket.get('families', {})
-            current_slugs = list(families.keys())
-            if current_slugs:
-                mongo_families_current.delete_many({'guild_id': guild_id, 'slug': {'$nin': current_slugs}})
-            else:
-                mongo_families_current.delete_many({'guild_id': guild_id})
-            for slug, family in families.items():
-                mongo_families_current.update_one(
-                    {'guild_id': guild_id, 'slug': slug},
-                    {'$set': {
-                        'guild_id': guild_id,
-                        'slug': slug,
-                        'name': family.get('name'),
-                        'role_id': family.get('role_id'),
-                        'color': family.get('color'),
-                        'image_url': family.get('image_url', ''),
-                        'members': family.get('members', []),
-                        'leader_id': family.get('leader_id'),
-                        'created_by': family.get('created_by'),
-                        'created_at': family.get('created_at'),
-                        'updated_at': now,
-                    }},
-                    upsert=True,
-                )
-            mongo_families_backups.insert_one({
-                'guild_id': guild_id,
-                'kind': 'full_snapshot',
-                'families': families,
-                'authorized_roles': bucket.get('authorized_roles', []),
-                'authorized_users': bucket.get('authorized_users', []),
-                'family_log_channel_id': bucket.get('family_log_channel_id'),
-                'created_at': now,
-            })
     except Exception:
         traceback.print_exc()
 
@@ -2013,6 +2167,12 @@ async def on_message(message):
         if not message.content and message.embeds:
             return
 
+        if message.guild:
+            try:
+                await postgres_save_member(message.author, message.guild)
+            except Exception:
+                traceback.print_exc()
+
         texto = message.content or ''
 
         # auto-ban convite
@@ -2085,6 +2245,14 @@ async def on_message(message):
 async def on_ready():
     print(f'[BOT] Logado como {bot.user} (id: {bot.user.id})')
     try:
+        ok = await postgres_init()
+        if ok:
+            total = await postgres_sync_all_guilds()
+            print(f'[POSTGRES] Sincronização inicial concluída: {total} usuário(s).')
+    except Exception as e:
+        print(f'[POSTGRES] Falha na inicialização/sincronização: {e}')
+        traceback.print_exc()
+    try:
         _load_reaction_rules()
         _ensure_default_rules_for_all_guilds()
     except Exception as e:
@@ -2095,13 +2263,22 @@ async def on_ready():
             await audit_permission_status(guild)
     except Exception:
         traceback.print_exc()
+
+@bot.event
+async def on_member_join(member):
     try:
-        ok = init_mongo()
-        if ok:
-            data = _family_db_load()
-            if data:
-                mongo_sync_families_snapshot(data)
-    except Exception:
+        await postgres_save_member(member, member.guild)
+    except Exception as e:
+        print(f'[POSTGRES] Falha ao salvar membro no on_member_join: {e}')
+        traceback.print_exc()
+
+
+@bot.event
+async def on_member_update(before, after):
+    try:
+        await postgres_save_member(after, after.guild)
+    except Exception as e:
+        print(f'[POSTGRES] Falha ao salvar membro no on_member_update: {e}')
         traceback.print_exc()
 
 
