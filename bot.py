@@ -1390,6 +1390,103 @@ async def _family_remove_member(guild: discord.Guild, family, member: discord.Me
                 traceback.print_exc()
 
 
+async def _family_ensure_role(guild: discord.Guild, family):
+    role = guild.get_role(family.role_id) if family and family.role_id else None
+    color_value = family.color if getattr(family, 'color', None) else '#7c5cff'
+    try:
+        discord_color, hex_color = _family_parse_color(color_value)
+    except Exception:
+        discord_color, hex_color = discord.Colour(0x7c5cff), '#7c5cff'
+
+    if role is None:
+        try:
+            role = await guild.create_role(name=family.name, colour=discord_color, reason='Recuperação automática de família salva no PostgreSQL')
+            _pg_exec(f'''UPDATE {PG_TABLE_FAMILIES} SET role_id = %s, color = %s, updated_at = NOW() WHERE guild_id = %s AND slug = %s''', (role.id, hex_color, guild.id, family.slug))
+            family.role_id = role.id
+            family.color = hex_color
+            return role, True, 'cargo recriado a partir do PostgreSQL'
+        except Exception as e:
+            traceback.print_exc()
+            return None, False, f'falha ao criar cargo: {e}'
+
+    updates = {}
+    if role.name != family.name:
+        updates['name'] = family.name
+    if str(role.color) != hex_color:
+        updates['colour'] = discord_color
+    if updates:
+        try:
+            await role.edit(reason='Sincronização automática de família salva no PostgreSQL', **updates)
+        except Exception:
+            traceback.print_exc()
+    return role, False, 'cargo existente sincronizado'
+
+
+def _family_member_ids_set(guild_id: int, family_slug: str) -> set[int]:
+    return set(_family_members(guild_id, family_slug))
+
+
+async def _family_restore_guild_from_postgres(guild: discord.Guild):
+    if not guild:
+        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_added': 0}
+
+    families = _family_list(guild.id)
+    if not families:
+        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_added': 0}
+
+    roles_created = 0
+    leaders_added = 0
+    for fam in families:
+        members_set = _family_member_ids_set(guild.id, fam.slug)
+        if fam.leader_id not in members_set:
+            try:
+                _pg_exec(f'''INSERT INTO {PG_TABLE_FAMILY_MEMBERS} (guild_id, family_slug, user_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING''', (guild.id, fam.slug, fam.leader_id))
+                leaders_added += 1
+            except Exception:
+                traceback.print_exc()
+        _, created, _ = await _family_ensure_role(guild, fam)
+        if created:
+            roles_created += 1
+
+    families = _family_list(guild.id)
+    roles_assigned = 0
+    roles_removed = 0
+
+    for member in guild.members:
+        current = _family_current_of_user(guild.id, member.id)
+        current_slug = current.slug if current else None
+
+        for fam in families:
+            if not fam.role_id:
+                continue
+            role = guild.get_role(fam.role_id)
+            if role is None:
+                continue
+            if role in member.roles and fam.slug != current_slug:
+                try:
+                    await member.remove_roles(role, reason='Sincronização automática das famílias (PostgreSQL)')
+                    roles_removed += 1
+                except Exception:
+                    traceback.print_exc()
+
+        if current and current.role_id:
+            role = guild.get_role(current.role_id)
+            if role and role not in member.roles:
+                try:
+                    await member.add_roles(role, reason='Restauração automática da família salva no PostgreSQL')
+                    roles_assigned += 1
+                except Exception:
+                    traceback.print_exc()
+
+    return {
+        'families': len(families),
+        'roles_created': roles_created,
+        'roles_assigned': roles_assigned,
+        'roles_removed': roles_removed,
+        'leaders_added': leaders_added,
+    }
+
+
 class _FamilyInviteView(discord.ui.View):
     def __init__(self, invited_user_id: int, guild_id_i: int, family_slug: str, invited_by_id: int):
         super().__init__(timeout=600)
@@ -1791,7 +1888,12 @@ def setup_family_system():
             if postgres_family_init():
                 _pg_setup_family_tables()
                 migrated = _pg_migrate_legacy_json_if_needed()
-                print(f'[FAMILIAS PG] Sistema pronto. Migração executada: {migrated} família(s).')
+                restored_total = 0
+                for guild in bot.guilds:
+                    stats = await _family_restore_guild_from_postgres(guild)
+                    restored_total += int(stats.get('families', 0))
+                    print(f"[FAMILIAS PG] {guild.name}: familias={stats.get('families', 0)}, cargos_criados={stats.get('roles_created', 0)}, cargos_atribuidos={stats.get('roles_assigned', 0)}, cargos_removidos={stats.get('roles_removed', 0)}, lideres_adicionados={stats.get('leaders_added', 0)}")
+                print(f'[FAMILIAS PG] Sistema pronto. Migração executada: {migrated} família(s). Recuperação em memória/Discord: {restored_total} família(s).')
             if guild_obj:
                 synced = await bot.tree.sync(guild=guild_obj)
             else:
@@ -1898,9 +2000,9 @@ async def on_ready():
     try:
         for guild in bot.guilds:
             await audit_permission_status(guild)
-            synced = await _sync_linked_role_in_guild(guild)
-            if synced:
-                print(f'[CARGOS VINCULADOS] {synced} membro(s) sincronizado(s) em {guild.name}.')
+            linked_synced = await _sync_linked_role_in_guild(guild)
+            if linked_synced:
+                print(f'[CARGOS VINCULADOS] {linked_synced} membro(s) sincronizado(s) em {guild.name}.')
     except Exception:
         traceback.print_exc()
 
