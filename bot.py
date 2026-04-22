@@ -982,6 +982,8 @@ PG_TABLE_FAMILY_INVITES = os.getenv('PG_FAMILY_INVITES_TABLE', 'family_invites')
 PG_TABLE_FAMILY_ADMIN_USERS = os.getenv('PG_FAMILY_ADMIN_USERS_TABLE', 'family_admin_users')
 PG_TABLE_FAMILY_ADMIN_ROLES = os.getenv('PG_FAMILY_ADMIN_ROLES_TABLE', 'family_admin_roles')
 PG_TABLE_FAMILY_AUDIT = os.getenv('PG_FAMILY_AUDIT_TABLE', 'family_audit_logs')
+LEGACY_TABLE_FAMILY_STATE = os.getenv('PG_LEGACY_FAMILY_STATE_TABLE', 'family_state')
+LEGACY_TABLE_GUILD_FAMILY_SETTINGS = os.getenv('PG_LEGACY_GUILD_FAMILY_SETTINGS_TABLE', 'guild_family_settings')
 
 
 def _pg_safe_table_name(name: str, fallback: str) -> str:
@@ -1422,22 +1424,18 @@ async def _family_ensure_role(guild: discord.Guild, family):
     return role, False, 'cargo existente sincronizado'
 
 
-def _family_member_ids_set(guild_id: int, family_slug: str) -> set[int]:
-    return set(_family_members(guild_id, family_slug))
-
-
 async def _family_restore_guild_from_postgres(guild: discord.Guild):
     if not guild:
-        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_adicionados': 0}
+        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_added': 0}
 
     families = _family_list(guild.id)
     if not families:
-        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_adicionados': 0}
+        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_added': 0}
 
     roles_created = 0
     leaders_added = 0
     for fam in families:
-        members_set = _family_member_ids_set(guild.id, fam.slug)
+        members_set = set(_family_members(guild.id, fam.slug))
         if fam.leader_id not in members_set:
             try:
                 _pg_exec(f'''INSERT INTO {PG_TABLE_FAMILY_MEMBERS} (guild_id, family_slug, user_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING''', (guild.id, fam.slug, fam.leader_id))
@@ -1455,7 +1453,6 @@ async def _family_restore_guild_from_postgres(guild: discord.Guild):
     for member in guild.members:
         current = _family_current_of_user(guild.id, member.id)
         current_slug = current.slug if current else None
-
         for fam in families:
             if not fam.role_id:
                 continue
@@ -1468,7 +1465,6 @@ async def _family_restore_guild_from_postgres(guild: discord.Guild):
                     roles_removed += 1
                 except Exception:
                     traceback.print_exc()
-
         if current and current.role_id:
             role = guild.get_role(current.role_id)
             if role and role not in member.roles:
@@ -1887,13 +1883,15 @@ def setup_family_system():
         try:
             if postgres_family_init():
                 _pg_setup_family_tables()
-                migrated = _pg_migrate_legacy_json_if_needed()
+                migrated_json = _pg_migrate_legacy_json_if_needed()
+                migrated_legacy = _pg_migrate_legacy_tables_if_needed()
                 restored_total = 0
                 for guild in bot.guilds:
                     stats = await _family_restore_guild_from_postgres(guild)
                     restored_total += int(stats.get('families', 0))
                     print(f"[FAMILIAS PG] {guild.name}: familias={stats.get('families', 0)}, cargos_criados={stats.get('roles_created', 0)}, cargos_atribuidos={stats.get('roles_assigned', 0)}, cargos_removidos={stats.get('roles_removed', 0)}, lideres_adicionados={stats.get('leaders_added', 0)}")
-                print(f'[FAMILIAS PG] Sistema pronto. Migração executada: {migrated} família(s). Recuperação em memória/Discord: {restored_total} família(s).')
+                print(f"[FAMILIAS PG] Migração JSON={migrated_json}; migração legacy_state={migrated_legacy.get('families', 0)} familias, members={migrated_legacy.get('members', 0)}, settings={migrated_legacy.get('settings', 0)}, admin_users={migrated_legacy.get('admin_users', 0)}, admin_roles={migrated_legacy.get('admin_roles', 0)}, invites={migrated_legacy.get('invites', 0)}")
+                print(f'[FAMILIAS PG] Sistema pronto. Recuperação em memória/Discord: {restored_total} família(s).')
             if guild_obj:
                 synced = await bot.tree.sync(guild=guild_obj)
             else:
