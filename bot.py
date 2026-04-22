@@ -2,7 +2,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import os, re, json, time, traceback, unicodedata, asyncio
+import os, re, json, time, traceback, unicodedata
 from pathlib import Path
 from collections import defaultdict, deque
 from io import BytesIO
@@ -12,11 +12,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 try:
     import psycopg2
-    from psycopg2.pool import ThreadedConnectionPool
+    from psycopg2.pool import SimpleConnectionPool
 except Exception:
     psycopg2 = None
-    ThreadedConnectionPool = None
-
+    SimpleConnectionPool = None
 
 # ==================== CONFIG ====================
 SEU_ID_DO_SERVIDOR = 1409292663752228960
@@ -38,487 +37,14 @@ CONTEXT_MAX_AGE_SECONDS = 180
 INVITE_REGEX = re.compile(r'(discord(?:\.gg|\.com/invite|app\.com/invite)/[A-Za-z0-9\-]+)', re.IGNORECASE)
 BAD_WORDS_PATTERN = re.compile(r'\b(?:cala boca|calaboca|clbc|cbc|fica quieto|quieto|se aquieta)\b(?:.*(?:jeffu|<@!?\d+>))?', re.IGNORECASE)
 
-# Persistência apenas em arquivo JSON
-# Persistência em PostgreSQL (Railway)
-POSTGRES_DSN = (
-    os.getenv('DATABASE_URL')
-    or os.getenv('POSTGRES_URL')
-    or os.getenv('POSTGRESQL_URL')
-)
-POSTGRES_HOST = os.getenv('PGHOST') or os.getenv('POSTGRES_HOST')
-POSTGRES_PORT = int(os.getenv('PGPORT') or os.getenv('POSTGRES_PORT') or 5432)
-POSTGRES_DB = os.getenv('PGDATABASE') or os.getenv('POSTGRES_DB')
-POSTGRES_USER = os.getenv('PGUSER') or os.getenv('POSTGRES_USER')
-POSTGRES_PASSWORD = os.getenv('PGPASSWORD') or os.getenv('POSTGRES_PASSWORD')
-POSTGRES_SSLMODE = os.getenv('PGSSLMODE') or ('require' if POSTGRES_DSN or POSTGRES_HOST else 'prefer')
-POSTGRES_CONNECT_TIMEOUT = int(os.getenv('PGCONNECT_TIMEOUT') or 10)
-POSTGRES_POOL_MIN = int(os.getenv('PG_POOL_MIN') or 1)
-POSTGRES_POOL_MAX = int(os.getenv('PG_POOL_MAX') or 5)
-POSTGRES_USERS_TABLE = os.getenv('PG_USERS_TABLE', 'discord_users').strip()
-POSTGRES_FAMILY_STATE_TABLE = os.getenv('PG_FAMILY_STATE_TABLE', 'family_state').strip()
-POSTGRES_FAMILY_SETTINGS_TABLE = os.getenv('PG_FAMILY_SETTINGS_TABLE', 'guild_family_settings').strip()
-POSTGRES_FAMILY_AUDIT_TABLE = os.getenv('PG_FAMILY_AUDIT_TABLE', 'family_audit_logs').strip()
-POSTGRES_SAVE_BOTS = str(os.getenv('PG_SAVE_BOTS', 'false')).lower() in ('1', 'true', 'yes', 'sim', 'on')
+# PostgreSQL (famílias como fonte principal)
+DATABASE_URL = os.getenv('DATABASE_URL')
+PG_POOL_MIN = int(os.getenv('PG_POOL_MIN', '1') or 1)
+PG_POOL_MAX = int(os.getenv('PG_POOL_MAX', '5') or 5)
+PG_SSLMODE = os.getenv('PGSSLMODE', 'require')
+FAMILY_IMPORT_JSON_ON_START = str(os.getenv('FAMILY_IMPORT_JSON_ON_START', 'true')).lower() in ('1', 'true', 'yes', 'sim', 'on')
 
-_postgres_pool = None
-
-
-def _postgres_has_config() -> bool:
-    return bool(POSTGRES_DSN or (POSTGRES_HOST and POSTGRES_DB and POSTGRES_USER and POSTGRES_PASSWORD))
-
-
-def _postgres_safe_table_name(name: str, fallback='discord_users') -> str:
-    name = (name or fallback).strip()
-    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
-        return fallback
-    return name
-
-
-def _postgres_connect_kwargs() -> dict:
-    if POSTGRES_DSN:
-        dsn = POSTGRES_DSN
-        if 'sslmode=' not in dsn:
-            separator = '&' if '?' in dsn else '?'
-            dsn = f'{dsn}{separator}sslmode={POSTGRES_SSLMODE}'
-        return {
-            'dsn': dsn,
-            'connect_timeout': POSTGRES_CONNECT_TIMEOUT,
-            'application_name': 'scanbot',
-        }
-    return {
-        'host': POSTGRES_HOST,
-        'port': POSTGRES_PORT,
-        'dbname': POSTGRES_DB,
-        'user': POSTGRES_USER,
-        'password': POSTGRES_PASSWORD,
-        'sslmode': POSTGRES_SSLMODE,
-        'connect_timeout': POSTGRES_CONNECT_TIMEOUT,
-        'application_name': 'scanbot',
-    }
-
-
-def postgres_enabled() -> bool:
-    return psycopg2 is not None and _postgres_has_config()
-
-
-def _postgres_get_pool():
-    global _postgres_pool
-    if _postgres_pool is not None:
-        return _postgres_pool
-    if not postgres_enabled():
-        return None
-    try:
-        kwargs = _postgres_connect_kwargs()
-        _postgres_pool = ThreadedConnectionPool(POSTGRES_POOL_MIN, POSTGRES_POOL_MAX, **kwargs)
-        return _postgres_pool
-    except Exception as e:
-        print(f'[POSTGRES] Falha ao criar pool: {e}')
-        traceback.print_exc()
-        return None
-
-
-def _postgres_users_table() -> str:
-    return _postgres_safe_table_name(POSTGRES_USERS_TABLE, 'discord_users')
-
-
-def _postgres_family_state_table() -> str:
-    return _postgres_safe_table_name(POSTGRES_FAMILY_STATE_TABLE, 'family_state')
-
-
-def _postgres_family_settings_table() -> str:
-    return _postgres_safe_table_name(POSTGRES_FAMILY_SETTINGS_TABLE, 'guild_family_settings')
-
-
-def _postgres_family_audit_table() -> str:
-    return _postgres_safe_table_name(POSTGRES_FAMILY_AUDIT_TABLE, 'family_audit_logs')
-
-
-def _pg_json(value, default):
-    if value is None:
-        value = default
-    return json.dumps(value, ensure_ascii=False, default=str)
-
-
-def _postgres_init_sync() -> bool:
-    if not postgres_enabled():
-        if psycopg2 is None:
-            print('[POSTGRES] psycopg2 não está instalado. Adicione psycopg2-binary ao projeto.')
-        else:
-            print('[POSTGRES] Banco não configurado. Defina DATABASE_URL ou variáveis PG* do Railway.')
-        return False
-    pool = _postgres_get_pool()
-    if pool is None:
-        return False
-    conn = None
-    users_table = _postgres_users_table()
-    family_state_table = _postgres_family_state_table()
-    family_settings_table = _postgres_family_settings_table()
-    audit_table = _postgres_family_audit_table()
-    try:
-        conn = pool.getconn()
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute(f'''                CREATE TABLE IF NOT EXISTS {users_table} (
-                    guild_id BIGINT NOT NULL,
-                    guild_name TEXT,
-                    user_id BIGINT NOT NULL,
-                    username TEXT NOT NULL,
-                    global_name TEXT,
-                    display_name TEXT,
-                    discriminator TEXT,
-                    is_bot BOOLEAN NOT NULL DEFAULT FALSE,
-                    avatar_url TEXT,
-                    joined_at TIMESTAMPTZ NULL,
-                    created_discord_at TIMESTAMPTZ NULL,
-                    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (guild_id, user_id)
-                )
-            ''')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{users_table}_user_id ON {users_table} (user_id)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{users_table}_last_seen_at ON {users_table} (last_seen_at DESC)')
-            cur.execute(f'''                CREATE TABLE IF NOT EXISTS {family_settings_table} (
-                    guild_id BIGINT PRIMARY KEY,
-                    authorized_roles JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    authorized_users JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    pending_invites JSONB NOT NULL DEFAULT '{{}}'::jsonb,
-                    family_log_channel_id BIGINT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            ''')
-            cur.execute(f'''                CREATE TABLE IF NOT EXISTS {family_state_table} (
-                    guild_id BIGINT NOT NULL,
-                    slug TEXT NOT NULL,
-                    name TEXT,
-                    role_id BIGINT,
-                    color TEXT,
-                    image_url TEXT,
-                    members JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    leader_id BIGINT,
-                    created_by BIGINT,
-                    created_at_text TEXT,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (guild_id, slug)
-                )
-            ''')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{family_state_table}_guild_id ON {family_state_table} (guild_id)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{family_state_table}_leader_id ON {family_state_table} (leader_id)')
-            cur.execute(f'''                CREATE TABLE IF NOT EXISTS {audit_table} (
-                    id BIGSERIAL PRIMARY KEY,
-                    guild_id BIGINT NOT NULL,
-                    guild_name TEXT,
-                    family_slug TEXT,
-                    family_name TEXT,
-                    action TEXT NOT NULL,
-                    actor_id BIGINT,
-                    actor_name TEXT,
-                    target_id BIGINT,
-                    target_name TEXT,
-                    details JSONB,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            ''')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{audit_table}_guild_id ON {audit_table} (guild_id)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{audit_table}_family_slug ON {audit_table} (family_slug)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{audit_table}_action ON {audit_table} (action)')
-            cur.execute(f'CREATE INDEX IF NOT EXISTS idx_{audit_table}_created_at ON {audit_table} (created_at DESC)')
-        print(f'[POSTGRES] Tabelas `{users_table}`, `{family_settings_table}`, `{family_state_table}` e `{audit_table}` prontas para uso.')
-        return True
-    except Exception as e:
-        print(f'[POSTGRES] Falha ao criar tabelas: {e}')
-        traceback.print_exc()
-        return False
-    finally:
-        if conn is not None and pool is not None:
-            pool.putconn(conn)
-
-
-async def postgres_init() -> bool:
-    return await asyncio.to_thread(_postgres_init_sync)
-
-
-def _member_payload(member: discord.abc.User, guild: discord.Guild | None = None) -> dict | None:
-    if member is None:
-        return None
-    guild = guild or getattr(member, 'guild', None)
-    if guild is None:
-        return None
-    is_bot = bool(getattr(member, 'bot', False))
-    if is_bot and not POSTGRES_SAVE_BOTS:
-        return None
-    avatar_url = None
-    try:
-        avatar_url = str(member.display_avatar.url)
-    except Exception:
-        avatar_url = None
-    return {
-        'guild_id': int(guild.id),
-        'guild_name': getattr(guild, 'name', None),
-        'user_id': int(member.id),
-        'username': getattr(member, 'name', None) or str(member),
-        'global_name': getattr(member, 'global_name', None),
-        'display_name': getattr(member, 'display_name', None) or getattr(member, 'name', None) or str(member),
-        'discriminator': getattr(member, 'discriminator', None),
-        'is_bot': is_bot,
-        'avatar_url': avatar_url,
-        'joined_at': getattr(member, 'joined_at', None),
-        'created_discord_at': getattr(member, 'created_at', None),
-    }
-
-
-def _postgres_upsert_users_sync(payloads: list[dict]) -> int:
-    if not payloads or not postgres_enabled():
-        return 0
-    pool = _postgres_get_pool()
-    if pool is None:
-        return 0
-    conn = None
-    table = _postgres_users_table()
-    rows = [
-        (
-            item['guild_id'], item['guild_name'], item['user_id'], item['username'], item['global_name'],
-            item['display_name'], item['discriminator'], item['is_bot'], item['avatar_url'],
-            item['joined_at'], item['created_discord_at']
-        )
-        for item in payloads if item
-    ]
-    if not rows:
-        return 0
-    sql = f'''        INSERT INTO {table} (
-            guild_id, guild_name, user_id, username, global_name, display_name,
-            discriminator, is_bot, avatar_url, joined_at, created_discord_at
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (guild_id, user_id) DO UPDATE SET
-            guild_name = EXCLUDED.guild_name,
-            username = EXCLUDED.username,
-            global_name = EXCLUDED.global_name,
-            display_name = EXCLUDED.display_name,
-            discriminator = EXCLUDED.discriminator,
-            is_bot = EXCLUDED.is_bot,
-            avatar_url = EXCLUDED.avatar_url,
-            joined_at = COALESCE(EXCLUDED.joined_at, {table}.joined_at),
-            created_discord_at = COALESCE(EXCLUDED.created_discord_at, {table}.created_discord_at),
-            last_seen_at = NOW()
-    '''
-    try:
-        conn = pool.getconn()
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.executemany(sql, rows)
-        return len(rows)
-    except Exception as e:
-        print(f'[POSTGRES] Falha ao salvar usuários: {e}')
-        traceback.print_exc()
-        return 0
-    finally:
-        if conn is not None and pool is not None:
-            pool.putconn(conn)
-
-
-async def postgres_save_member(member: discord.abc.User, guild: discord.Guild | None = None) -> bool:
-    payload = _member_payload(member, guild)
-    if payload is None:
-        return False
-    saved = await asyncio.to_thread(_postgres_upsert_users_sync, [payload])
-    return saved > 0
-
-
-async def postgres_sync_all_guilds() -> int:
-    total = 0
-    for guild in bot.guilds:
-        payloads = [_member_payload(member, guild) for member in getattr(guild, 'members', [])]
-        payloads = [item for item in payloads if item]
-        if not payloads:
-            continue
-        try:
-            total += await asyncio.to_thread(_postgres_upsert_users_sync, payloads)
-        except Exception:
-            traceback.print_exc()
-    return total
-
-
-def _postgres_sync_families_snapshot_sync(full_data: dict) -> int:
-    if not full_data or not postgres_enabled():
-        return 0
-    pool = _postgres_get_pool()
-    if pool is None:
-        return 0
-    conn = None
-    family_state_table = _postgres_family_state_table()
-    family_settings_table = _postgres_family_settings_table()
-    total_families = 0
-    try:
-        conn = pool.getconn()
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            for guild_key, bucket in list(full_data.items()):
-                guild_id = int(guild_key)
-                bucket = _family_bucket(full_data, guild_id)
-                cur.execute(
-                    f'''                    INSERT INTO {family_settings_table} (
-                        guild_id, authorized_roles, authorized_users, pending_invites, family_log_channel_id, updated_at
-                    )
-                    VALUES (%s, %s::jsonb, %s::jsonb, %s::jsonb, %s, NOW())
-                    ON CONFLICT (guild_id) DO UPDATE SET
-                        authorized_roles = EXCLUDED.authorized_roles,
-                        authorized_users = EXCLUDED.authorized_users,
-                        pending_invites = EXCLUDED.pending_invites,
-                        family_log_channel_id = EXCLUDED.family_log_channel_id,
-                        updated_at = NOW()
-                    ''',
-                    (
-                        guild_id,
-                        _pg_json(bucket.get('authorized_roles', []), []),
-                        _pg_json(bucket.get('authorized_users', []), []),
-                        _pg_json(bucket.get('pending_invites', {}), {}),
-                        bucket.get('family_log_channel_id'),
-                    ),
-                )
-                families = bucket.get('families', {})
-                current_slugs = list(families.keys())
-                if current_slugs:
-                    placeholders = ', '.join(['%s'] * len(current_slugs))
-                    cur.execute(
-                        f'DELETE FROM {family_state_table} WHERE guild_id = %s AND slug NOT IN ({placeholders})',
-                        [guild_id, *current_slugs],
-                    )
-                else:
-                    cur.execute(f'DELETE FROM {family_state_table} WHERE guild_id = %s', (guild_id,))
-                for slug, family in families.items():
-                    cur.execute(
-                        f'''                        INSERT INTO {family_state_table} (
-                            guild_id, slug, name, role_id, color, image_url, members, leader_id, created_by, created_at_text, updated_at
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW())
-                        ON CONFLICT (guild_id, slug) DO UPDATE SET
-                            name = EXCLUDED.name,
-                            role_id = EXCLUDED.role_id,
-                            color = EXCLUDED.color,
-                            image_url = EXCLUDED.image_url,
-                            members = EXCLUDED.members,
-                            leader_id = EXCLUDED.leader_id,
-                            created_by = EXCLUDED.created_by,
-                            created_at_text = EXCLUDED.created_at_text,
-                            updated_at = NOW()
-                        ''',
-                        (
-                            guild_id,
-                            slug,
-                            family.get('name'),
-                            family.get('role_id'),
-                            family.get('color'),
-                            family.get('image_url', ''),
-                            _pg_json(family.get('members', []), []),
-                            family.get('leader_id'),
-                            family.get('created_by'),
-                            family.get('created_at'),
-                        ),
-                    )
-                    total_families += 1
-        return total_families
-    except Exception as e:
-        print(f'[POSTGRES] Falha ao sincronizar famílias: {e}')
-        traceback.print_exc()
-        return 0
-    finally:
-        if conn is not None and pool is not None:
-            pool.putconn(conn)
-
-
-async def postgres_sync_families_snapshot(full_data: dict) -> int:
-    snapshot = json.loads(json.dumps(full_data or {}, ensure_ascii=False, default=str))
-    return await asyncio.to_thread(_postgres_sync_families_snapshot_sync, snapshot)
-
-
-def _display_label(obj) -> str | None:
-    if obj is None:
-        return None
-    return getattr(obj, 'display_name', None) or getattr(obj, 'name', None) or str(obj)
-
-
-def _family_audit_payload(family=None):
-    if family is None:
-        return None, None
-    if isinstance(family, dict):
-        return family.get('slug'), family.get('name')
-    if isinstance(family, tuple) and len(family) >= 2:
-        return family[0], family[1]
-    return None, str(family)
-
-
-def _guess_family_audit_action(title: str, action_text: str = '', reason_text: str = '') -> str:
-    title_l = (title or '').lower()
-    if 'criada' in title_l:
-        return 'family_created'
-    if 'enviado' in title_l and 'convite' in title_l:
-        return 'invite_sent'
-    if 'aceito' in title_l and 'convite' in title_l:
-        return 'invite_accepted'
-    if 'recusado' in title_l and 'convite' in title_l:
-        return 'invite_declined'
-    if 'renomeada' in title_l:
-        return 'family_renamed'
-    if 'cor' in title_l and 'alterada' in title_l:
-        return 'family_color_updated'
-    if 'foto' in title_l and 'alterada' in title_l:
-        return 'family_photo_updated'
-    if 'removido' in title_l:
-        return 'member_removed'
-    if 'deletada' in title_l:
-        return 'family_deleted'
-    return 'family_log'
-
-
-def _postgres_log_family_action_sync(action: str, guild: discord.Guild, actor=None, family=None, target=None, details=None) -> bool:
-    if not action or guild is None or not postgres_enabled():
-        return False
-    pool = _postgres_get_pool()
-    if pool is None:
-        return False
-    conn = None
-    table = _postgres_family_audit_table()
-    family_slug, family_name = _family_audit_payload(family)
-    details_payload = _pg_json(details or {}, {})
-    try:
-        conn = pool.getconn()
-        conn.autocommit = True
-        with conn.cursor() as cur:
-            cur.execute(
-                f'''                INSERT INTO {table} (
-                    guild_id, guild_name, family_slug, family_name, action,
-                    actor_id, actor_name, target_id, target_name, details
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                ''',
-                (
-                    int(guild.id),
-                    getattr(guild, 'name', None),
-                    family_slug,
-                    family_name,
-                    action,
-                    int(getattr(actor, 'id', 0) or 0) or None,
-                    _display_label(actor),
-                    int(getattr(target, 'id', 0) or 0) or None,
-                    _display_label(target),
-                    details_payload,
-                ),
-            )
-        return True
-    except Exception as e:
-        print(f'[POSTGRES] Falha ao auditar ação de família: {e}')
-        traceback.print_exc()
-        return False
-    finally:
-        if conn is not None and pool is not None:
-            pool.putconn(conn)
-
-
-async def postgres_log_family_action(action: str, guild: discord.Guild, actor=None, family=None, target=None, details=None) -> bool:
-    return await asyncio.to_thread(_postgres_log_family_action_sync, action, guild, actor, family, target, details)
-
-
-
+pg_pool = None
 
 # intents/bot
 intents = discord.Intents.default()
@@ -1393,35 +919,254 @@ async def log(guild, member=None, title='Log', channel_name='', reason='', actio
     except Exception:
         traceback.print_exc()
 
-# ==================== SISTEMA DE FAMÍLIAS (V4) ====================
-FAMILIAS_DB_FILE = ARQUIVO
+# ==================== SISTEMA DE FAMÍLIAS (POSTGRESQL) ====================
 FAMILY_HEX_COLOR_RE = re.compile(r'^#?[0-9a-fA-F]{6}$')
+FAMILY_URL_RE = re.compile(r'^https?://', re.IGNORECASE)
+
+PG_TABLE_FAMILY_SETTINGS = os.getenv('PG_FAMILY_SETTINGS_TABLE', 'family_settings')
+PG_TABLE_FAMILIES = os.getenv('PG_FAMILIES_TABLE', 'families')
+PG_TABLE_FAMILY_MEMBERS = os.getenv('PG_FAMILY_MEMBERS_TABLE', 'family_members')
+PG_TABLE_FAMILY_INVITES = os.getenv('PG_FAMILY_INVITES_TABLE', 'family_invites')
+PG_TABLE_FAMILY_ADMIN_USERS = os.getenv('PG_FAMILY_ADMIN_USERS_TABLE', 'family_admin_users')
+PG_TABLE_FAMILY_ADMIN_ROLES = os.getenv('PG_FAMILY_ADMIN_ROLES_TABLE', 'family_admin_roles')
+PG_TABLE_FAMILY_AUDIT = os.getenv('PG_FAMILY_AUDIT_TABLE', 'family_audit_logs')
 
 
-def _family_db_load() -> dict:
-    if not os.path.exists(FAMILIAS_DB_FILE):
+def _pg_safe_table_name(name: str, fallback: str) -> str:
+    name = (name or fallback).strip()
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+        return fallback
+    return name
+
+
+PG_TABLE_FAMILY_SETTINGS = _pg_safe_table_name(PG_TABLE_FAMILY_SETTINGS, 'family_settings')
+PG_TABLE_FAMILIES = _pg_safe_table_name(PG_TABLE_FAMILIES, 'families')
+PG_TABLE_FAMILY_MEMBERS = _pg_safe_table_name(PG_TABLE_FAMILY_MEMBERS, 'family_members')
+PG_TABLE_FAMILY_INVITES = _pg_safe_table_name(PG_TABLE_FAMILY_INVITES, 'family_invites')
+PG_TABLE_FAMILY_ADMIN_USERS = _pg_safe_table_name(PG_TABLE_FAMILY_ADMIN_USERS, 'family_admin_users')
+PG_TABLE_FAMILY_ADMIN_ROLES = _pg_safe_table_name(PG_TABLE_FAMILY_ADMIN_ROLES, 'family_admin_roles')
+PG_TABLE_FAMILY_AUDIT = _pg_safe_table_name(PG_TABLE_FAMILY_AUDIT, 'family_audit_logs')
+
+
+class _PGFamilyRow:
+    def __init__(self, guild_id, slug, name, role_id, color, leader_id, image_url, created_by):
+        self.guild_id = int(guild_id)
+        self.slug = slug
+        self.name = name
+        self.role_id = int(role_id) if role_id is not None else None
+        self.color = color
+        self.leader_id = int(leader_id)
+        self.image_url = image_url or ''
+        self.created_by = int(created_by)
+
+
+def postgres_family_enabled() -> bool:
+    return psycopg2 is not None and SimpleConnectionPool is not None and bool(DATABASE_URL)
+
+
+def postgres_family_init() -> bool:
+    global pg_pool
+    if pg_pool is not None:
+        return True
+    if not postgres_family_enabled():
+        if psycopg2 is None or SimpleConnectionPool is None:
+            print('[POSTGRES] psycopg2 não está instalado. Adicione psycopg2-binary ao projeto.')
+        else:
+            print('[POSTGRES] DATABASE_URL não definido para o sistema de famílias.')
+        return False
+    try:
+        dsn = DATABASE_URL
+        if 'sslmode=' not in dsn:
+            sep = '&' if '?' in dsn else '?'
+            dsn = f'{dsn}{sep}sslmode={PG_SSLMODE}'
+        pg_pool = SimpleConnectionPool(PG_POOL_MIN, PG_POOL_MAX, dsn=dsn)
+        return True
+    except Exception as e:
+        print('[POSTGRES] Falha ao iniciar pool:', e)
+        traceback.print_exc()
+        return False
+
+
+def _pg_exec(query: str, params=None, fetch=False, fetchone=False):
+    if pg_pool is None:
+        raise RuntimeError('Pool PostgreSQL não inicializado')
+    conn = pg_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            if fetchone:
+                row = cur.fetchone()
+                conn.commit()
+                return row
+            if fetch:
+                rows = cur.fetchall()
+                conn.commit()
+                return rows
+            conn.commit()
+            return None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pg_pool.putconn(conn)
+
+
+def _pg_transaction(callback):
+    if pg_pool is None:
+        raise RuntimeError('Pool PostgreSQL não inicializado')
+    conn = pg_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            result = callback(conn, cur)
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pg_pool.putconn(conn)
+
+
+def _pg_setup_family_tables() -> None:
+    _pg_exec(f'''CREATE TABLE IF NOT EXISTS {PG_TABLE_FAMILY_SETTINGS} (
+        guild_id BIGINT PRIMARY KEY,
+        family_log_channel_id BIGINT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )''')
+    _pg_exec(f'''CREATE TABLE IF NOT EXISTS {PG_TABLE_FAMILY_ADMIN_USERS} (
+        guild_id BIGINT NOT NULL,
+        user_id BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (guild_id, user_id)
+    )''')
+    _pg_exec(f'''CREATE TABLE IF NOT EXISTS {PG_TABLE_FAMILY_ADMIN_ROLES} (
+        guild_id BIGINT NOT NULL,
+        role_id BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (guild_id, role_id)
+    )''')
+    _pg_exec(f'''CREATE TABLE IF NOT EXISTS {PG_TABLE_FAMILIES} (
+        guild_id BIGINT NOT NULL,
+        slug TEXT NOT NULL,
+        name TEXT NOT NULL,
+        role_id BIGINT,
+        color TEXT NOT NULL DEFAULT '#7c5cff',
+        leader_id BIGINT NOT NULL,
+        image_url TEXT NOT NULL DEFAULT '',
+        created_by BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (guild_id, slug)
+    )''')
+    _pg_exec(f'''CREATE TABLE IF NOT EXISTS {PG_TABLE_FAMILY_MEMBERS} (
+        guild_id BIGINT NOT NULL,
+        family_slug TEXT NOT NULL,
+        user_id BIGINT NOT NULL,
+        joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (guild_id, family_slug, user_id)
+    )''')
+    _pg_exec(f'''CREATE TABLE IF NOT EXISTS {PG_TABLE_FAMILY_INVITES} (
+        guild_id BIGINT NOT NULL,
+        family_slug TEXT NOT NULL,
+        user_id BIGINT NOT NULL,
+        invited_by BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (guild_id, family_slug, user_id)
+    )''')
+    _pg_exec(f'''CREATE TABLE IF NOT EXISTS {PG_TABLE_FAMILY_AUDIT} (
+        id BIGSERIAL PRIMARY KEY,
+        guild_id BIGINT NOT NULL,
+        family_slug TEXT,
+        family_name TEXT,
+        action TEXT NOT NULL,
+        actor_id BIGINT,
+        actor_name TEXT,
+        target_id BIGINT,
+        target_name TEXT,
+        details TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )''')
+
+
+def _legacy_family_db_load() -> dict:
+    if not os.path.exists(ARQUIVO):
         return {}
     try:
-        with open(FAMILIAS_DB_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        with open(ARQUIVO, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
     except Exception:
         traceback.print_exc()
         return {}
 
 
-def _family_db_save(data: dict):
-    with open(FAMILIAS_DB_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+def _pg_family_count_all() -> int:
+    row = _pg_exec(f'SELECT COUNT(*) FROM {PG_TABLE_FAMILIES}', fetchone=True)
+    return int(row[0]) if row else 0
+
+
+def _pg_migrate_legacy_json_if_needed() -> int:
+    if not FAMILY_IMPORT_JSON_ON_START:
+        return 0
     try:
-        if postgres_enabled():
+        if _pg_family_count_all() > 0:
+            return 0
+    except Exception:
+        traceback.print_exc()
+        return 0
+    data = _legacy_family_db_load()
+    if not data:
+        return 0
+    migrated = 0
+    for guild_key, bucket in data.items():
+        try:
+            guild_id = int(guild_key)
+        except Exception:
+            continue
+        _pg_exec(
+            f'''INSERT INTO {PG_TABLE_FAMILY_SETTINGS} (guild_id, family_log_channel_id, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (guild_id) DO UPDATE SET family_log_channel_id = EXCLUDED.family_log_channel_id, updated_at = NOW()''',
+            (guild_id, bucket.get('family_log_channel_id')),
+        )
+        for uid in bucket.get('authorized_users', []) or []:
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                _postgres_sync_families_snapshot_sync(data)
-            else:
-                loop.create_task(postgres_sync_families_snapshot(data))
-    except Exception:
-        traceback.print_exc()
+                _pg_exec(f'INSERT INTO {PG_TABLE_FAMILY_ADMIN_USERS} (guild_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING', (guild_id, int(uid)))
+            except Exception:
+                traceback.print_exc()
+        for rid in bucket.get('authorized_roles', []) or []:
+            try:
+                _pg_exec(f'INSERT INTO {PG_TABLE_FAMILY_ADMIN_ROLES} (guild_id, role_id) VALUES (%s, %s) ON CONFLICT DO NOTHING', (guild_id, int(rid)))
+            except Exception:
+                traceback.print_exc()
+        for slug, family in (bucket.get('families', {}) or {}).items():
+            try:
+                _pg_exec(
+                    f'''INSERT INTO {PG_TABLE_FAMILIES} (guild_id, slug, name, role_id, color, leader_id, image_url, created_by)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (guild_id, slug) DO NOTHING''',
+                    (
+                        guild_id, slug, family.get('name', slug), family.get('role_id'), family.get('color', '#7c5cff'),
+                        family.get('leader_id') or DONO_ID, family.get('image_url', ''), family.get('created_by') or family.get('leader_id') or DONO_ID,
+                    ),
+                )
+                for uid in family.get('members', []) or []:
+                    _pg_exec(f'INSERT INTO {PG_TABLE_FAMILY_MEMBERS} (guild_id, family_slug, user_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING', (guild_id, slug, int(uid)))
+                migrated += 1
+            except Exception:
+                traceback.print_exc()
+        for invited_user_id, invite_data in (bucket.get('pending_invites', {}) or {}).items():
+            try:
+                _pg_exec(
+                    f'''INSERT INTO {PG_TABLE_FAMILY_INVITES} (guild_id, family_slug, user_id, invited_by)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (guild_id, family_slug, user_id) DO UPDATE SET invited_by = EXCLUDED.invited_by, created_at = NOW()''',
+                    (guild_id, invite_data.get('family_slug'), int(invited_user_id), int(invite_data.get('invited_by') or DONO_ID)),
+                )
+            except Exception:
+                traceback.print_exc()
+    return migrated
 
 
 def _family_slug(text: str) -> str:
@@ -1432,52 +1177,53 @@ def _family_slug(text: str) -> str:
     return text or 'familia'
 
 
-def _family_bucket(data: dict, guild_id: int) -> dict:
-    key = str(guild_id)
-    if key not in data:
-        data[key] = {
-            'families': {},
-            'authorized_roles': [],
-            'authorized_users': [DONO_ID],
-            'pending_invites': {},
-            'family_log_channel_id': None,
-        }
-    bucket = data[key]
-    bucket.setdefault('families', {})
-    bucket.setdefault('authorized_roles', [])
-    bucket.setdefault('authorized_users', [DONO_ID])
-    bucket.setdefault('pending_invites', {})
-    bucket.setdefault('family_log_channel_id', None)
-    if DONO_ID not in bucket['authorized_users']:
-        bucket['authorized_users'].append(DONO_ID)
-    return bucket
+def _family_from_row(row):
+    return _PGFamilyRow(*row) if row else None
 
 
-def _family_find(bucket: dict, family_name: str):
-    slug = _family_slug(family_name)
-    families = bucket.get('families', {})
-    if slug in families:
-        return slug, families[slug]
-    family_name_l = family_name.strip().lower()
-    for key, fam in families.items():
-        if fam.get('name', '').strip().lower() == family_name_l:
-            return key, fam
-    return None, None
+def _family_get(guild_id: int, slug_or_name: str):
+    slug = _family_slug(slug_or_name)
+    row = _pg_exec(
+        f'''SELECT guild_id, slug, name, role_id, color, leader_id, image_url, created_by
+            FROM {PG_TABLE_FAMILIES}
+            WHERE guild_id = %s AND (slug = %s OR lower(name) = lower(%s))
+            ORDER BY slug = %s DESC LIMIT 1''',
+        (guild_id, slug, slug_or_name, slug), fetchone=True)
+    return _family_from_row(row)
 
 
-def _family_find_by_slug(bucket: dict, slug: str):
-    fam = bucket.get('families', {}).get(slug)
-    return (slug, fam) if fam else (None, None)
+def _family_list(guild_id: int):
+    rows = _pg_exec(f'''SELECT guild_id, slug, name, role_id, color, leader_id, image_url, created_by FROM {PG_TABLE_FAMILIES} WHERE guild_id = %s ORDER BY name''', (guild_id,), fetch=True) or []
+    return [_family_from_row(r) for r in rows]
 
 
-def _family_parse_color(value: str | None):
+def _family_members(guild_id: int, family_slug: str) -> list[int]:
+    rows = _pg_exec(f'''SELECT user_id FROM {PG_TABLE_FAMILY_MEMBERS} WHERE guild_id = %s AND family_slug = %s ORDER BY joined_at''', (guild_id, family_slug), fetch=True) or []
+    return [int(r[0]) for r in rows]
+
+
+def _family_member_count(guild_id: int, family_slug: str) -> int:
+    row = _pg_exec(f'''SELECT COUNT(*) FROM {PG_TABLE_FAMILY_MEMBERS} WHERE guild_id = %s AND family_slug = %s''', (guild_id, family_slug), fetchone=True)
+    return int(row[0]) if row else 0
+
+
+def _family_current_of_user(guild_id: int, user_id: int):
+    row = _pg_exec(
+        f'''SELECT f.guild_id, f.slug, f.name, f.role_id, f.color, f.leader_id, f.image_url, f.created_by
+            FROM {PG_TABLE_FAMILIES} f JOIN {PG_TABLE_FAMILY_MEMBERS} fm ON fm.guild_id = f.guild_id AND fm.family_slug = f.slug
+            WHERE fm.guild_id = %s AND fm.user_id = %s LIMIT 1''',
+        (guild_id, user_id), fetchone=True)
+    return _family_from_row(row)
+
+
+def _family_parse_color(value):
     if not value:
         return discord.Colour(0x7c5cff), '#7c5cff'
     value = value.strip()
-    if not FAMILY_HEX_COLOR_RE.match(value):
-        raise ValueError('Use uma cor no formato #RRGGBB, ex: #7c5cff')
     if not value.startswith('#'):
         value = '#' + value
+    if not FAMILY_HEX_COLOR_RE.match(value):
+        raise ValueError('Use uma cor no formato #RRGGBB, ex: #7c5cff')
     return discord.Colour(int(value[1:], 16)), value.lower()
 
 
@@ -1485,255 +1231,111 @@ def _family_is_owner(interaction: discord.Interaction) -> bool:
     return interaction.user.id == DONO_ID
 
 
-def _family_is_authorized_role(interaction: discord.Interaction, bucket: dict) -> bool:
-    authorized_roles = set(int(x) for x in bucket.get('authorized_roles', []))
-    return any(getattr(role, 'id', 0) in authorized_roles for role in getattr(interaction.user, 'roles', []))
+def _family_has_admin(interaction: discord.Interaction) -> bool:
+    if not interaction.guild:
+        return False
+    if _family_is_owner(interaction):
+        return True
+    member = interaction.user if isinstance(interaction.user, discord.Member) else None
+    if member and (member.guild_permissions.administrator or member.guild_permissions.manage_guild):
+        return True
+    user_rows = _pg_exec(f'SELECT 1 FROM {PG_TABLE_FAMILY_ADMIN_USERS} WHERE guild_id = %s AND user_id = %s LIMIT 1', (interaction.guild_id, interaction.user.id), fetchone=True)
+    if user_rows:
+        return True
+    role_ids = {getattr(role, 'id', 0) for role in getattr(interaction.user, 'roles', [])}
+    if role_ids:
+        placeholders = ', '.join(['%s'] * len(role_ids))
+        rows = _pg_exec(f'SELECT role_id FROM {PG_TABLE_FAMILY_ADMIN_ROLES} WHERE guild_id = %s AND role_id IN ({placeholders})', [interaction.guild_id, *list(role_ids)], fetch=True) or []
+        return bool(rows)
+    return False
 
 
-def _family_is_authorized_user(interaction: discord.Interaction, bucket: dict) -> bool:
-    authorized_users = set(int(x) for x in bucket.get('authorized_users', []))
-    return interaction.user.id in authorized_users or _family_is_owner(interaction)
+def _family_can_manage(interaction: discord.Interaction, family: _PGFamilyRow) -> bool:
+    return _family_has_admin(interaction) or int(family.leader_id) == interaction.user.id
 
 
-def _family_has_admin(interaction: discord.Interaction, bucket: dict) -> bool:
-    return _family_is_owner(interaction) or _family_is_authorized_user(interaction, bucket) or _family_is_authorized_role(interaction, bucket)
+def _family_log_channel_id(guild_id: int):
+    row = _pg_exec(f'SELECT family_log_channel_id FROM {PG_TABLE_FAMILY_SETTINGS} WHERE guild_id = %s', (guild_id,), fetchone=True)
+    return int(row[0]) if row and row[0] is not None else None
 
 
-def _family_can_manage(interaction: discord.Interaction, bucket: dict, family: dict) -> bool:
-    return _family_has_admin(interaction, bucket) or int(family.get('leader_id', 0)) == interaction.user.id
+def _family_audit(guild: discord.Guild, action: str, actor=None, family=None, target=None, details: str = ''):
+    try:
+        _pg_exec(
+            f'''INSERT INTO {PG_TABLE_FAMILY_AUDIT} (guild_id, family_slug, family_name, action, actor_id, actor_name, target_id, target_name, details)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+            (guild.id, family.slug if family else None, family.name if family else None, action, getattr(actor, 'id', None), _family_actor_label(actor), getattr(target, 'id', None), _family_actor_label(target), details or ''),
+        )
+    except Exception:
+        traceback.print_exc()
 
 
-async def _family_remove_member_from_other_families(guild: discord.Guild, bucket: dict, member: discord.Member, keep_slug: str | None = None):
-    changed = False
-    for slug, fam in list(bucket.get('families', {}).items()):
-        if keep_slug and slug == keep_slug:
-            continue
-        members = fam.get('members', [])
-        if member.id in members:
-            members.remove(member.id)
-            fam['members'] = members
-            role_id = fam.get('role_id')
-            if role_id:
-                role = guild.get_role(int(role_id))
-                if role and role in member.roles:
-                    try:
-                        await member.remove_roles(role, reason='Mudança de família')
-                    except Exception:
-                        traceback.print_exc()
-            changed = True
-    return changed
+def _family_actor_label(user):
+    if user is None:
+        return None
+    return getattr(user, 'display_name', None) or getattr(user, 'name', None) or str(user)
 
 
-async def _family_sync_role_to_members(guild: discord.Guild, family: dict):
-    role_id = family.get('role_id')
-    if not role_id:
-        return
-    role = guild.get_role(int(role_id))
-    if role is None:
-        return
-    family_member_ids = set(int(x) for x in family.get('members', []))
-    for member in guild.members:
-        try:
-            if member.id in family_member_ids and role not in member.roles:
-                await member.add_roles(role, reason='Sincronização de família')
-            elif member.id not in family_member_ids and role in member.roles:
-                await member.remove_roles(role, reason='Sincronização de família')
-        except Exception:
-            traceback.print_exc()
-
-
-def _family_build_embed(title: str, description: str, color: int = 0x7c5cff) -> discord.Embed:
-    return discord.Embed(title=title, description=description, color=color)
-
-
-def _family_build_details_embed(guild: discord.Guild, family: dict, selected_member: discord.Member | None = None) -> discord.Embed:
-    role = guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-    leader = guild.get_member(int(family.get('leader_id', 0))) if family.get('leader_id') else None
-    members = []
-    for member_id in family.get('members', []):
-        member = guild.get_member(int(member_id))
-        members.append(member.mention if member else f'`{member_id}`')
-    desc = (
-        f"**Nome:** {family.get('name')}\n"
-        f"**Cargo:** {role.mention if role else '`não encontrado`'}\n"
-        f"**Cor:** `{family.get('color', '#7c5cff')}`\n"
-        f"**Líder:** {leader.mention if leader else '`não encontrado`'}\n"
-        f"**Membros ({len(members)}):** {' '.join(members) if members else 'nenhum'}"
-    )
-    embed = _family_build_embed(f"Família • {family.get('name')}", desc, int(family.get('color', '#7c5cff')[1:], 16))
-    if family.get('image_url'):
-        embed.set_thumbnail(url=family['image_url'])
-    if selected_member is not None:
-        embed.set_footer(text=f'Membro selecionado no painel: {selected_member.display_name}')
-    else:
-        embed.set_footer(text='Selecione uma família e um membro no painel')
-    return embed
-
-
-# Log verde de família
-FAMILY_LOG_BG_TOP = (16, 73, 40)
-FAMILY_LOG_BG = (8, 44, 24)
-FAMILY_LOG_CARD = (18, 60, 36)
-FAMILY_LOG_BORDER = (94, 210, 140)
-FAMILY_LOG_TEXT = (239, 252, 244)
-FAMILY_LOG_MUTED = (178, 226, 194)
-FAMILY_LOG_PILL = (28, 88, 52)
-FAMILY_LOG_LINE = (60, 140, 90)
-FAMILY_LOG_SHADOW = (0, 0, 0, 120)
-
-
-def _family_draw_gradient(canvas):
-    w, h = canvas.size
-    px = canvas.load()
-    tr, tg, tb = FAMILY_LOG_BG_TOP
-    br, bg, bb = FAMILY_LOG_BG
-    for y in range(h):
-        t = y / max(1, h - 1)
-        c = (int(tr + (br - tr) * t), int(tg + (bg - tg) * t), int(tb + (bb - tb) * t))
-        for x in range(w):
-            px[x, y] = c
-
-
-def _family_wrap(draw, text, font, max_width):
-    text = (text or '').strip()
-    if not text:
-        return ['']
-    words = text.split()
-    lines = []
-    current = words[0]
-    for word in words[1:]:
-        candidate = f'{current} {word}'
-        if _text_width(draw, candidate, font) <= max_width:
-            current = candidate
-        else:
-            lines.append(current)
-            current = word
-    lines.append(current)
-    return lines[:3]
-
-
-async def _build_family_log_image(guild, member=None, title='Log de Família', reason='', action='', message_text=''):
-    width, height = 1000, 620
-    canvas = Image.new('RGB', (width, height), FAMILY_LOG_BG)
-    _family_draw_gradient(canvas)
-    rgba = canvas.convert('RGBA')
-    shadow = Image.new('RGBA', (width, height), (0, 0, 0, 0))
-    sh = ImageDraw.Draw(shadow)
-    sh.rounded_rectangle((78, 78, 922, 538), radius=34, fill=FAMILY_LOG_SHADOW)
-    shadow = shadow.filter(ImageFilter.GaussianBlur(18))
-    rgba = Image.alpha_composite(rgba, shadow)
-    draw = ImageDraw.Draw(rgba)
-    draw.rounded_rectangle((70, 70, 930, 530), radius=34, fill=FAMILY_LOG_CARD, outline=FAMILY_LOG_BORDER, width=3)
-    draw.rounded_rectangle((86, 86, 914, 514), radius=26, outline=FAMILY_LOG_LINE, width=1)
-    draw.rectangle((0, 560, width, height), fill=(10, 32, 18))
-    draw.rectangle((0, 602, width, height), fill=(58, 166, 92))
-    title_font = _get_font(34, True)
-    label_font = _get_font(22, True)
-    body_font = _get_font(26, False)
-    small_font = _get_font(16, False)
-    badge_font = _get_font(18, True)
-    display_name = (getattr(member, 'display_name', None) or getattr(member, 'name', None) or 'Sistema') if member else 'Sistema'
-    guild_name = (guild.name if guild else 'Discord')[:26]
-    draw.rounded_rectangle((96, 92, 350, 146), radius=16, fill=FAMILY_LOG_PILL)
-    draw.text((112, 104), guild_name, font=badge_font, fill=FAMILY_LOG_TEXT)
-    draw.text((112, 124), 'Family Logs', font=small_font, fill=FAMILY_LOG_MUTED)
-    draw.text((110, 184), title, font=title_font, fill=FAMILY_LOG_TEXT)
-    draw.text((110, 236), 'Nome:', font=label_font, fill=FAMILY_LOG_MUTED)
-    draw.text((300, 236), display_name, font=body_font, fill=FAMILY_LOG_TEXT)
-    reason_lines = _family_wrap(draw, reason or 'não informado', body_font, 560)
-    action_lines = _family_wrap(draw, action or 'não informada', body_font, 560)
-    msg_lines = _family_wrap(draw, message_text or 'sem mensagem', body_font, 560)
-    y = 286
-    draw.text((110, y), 'Motivo:', font=label_font, fill=FAMILY_LOG_MUTED)
-    iy = y
-    for line in reason_lines:
-        draw.text((300, iy), line, font=body_font, fill=FAMILY_LOG_TEXT)
-        iy += 34
-    y = iy + 14
-    draw.text((110, y), 'Ação:', font=label_font, fill=FAMILY_LOG_MUTED)
-    iy = y
-    for line in action_lines:
-        draw.text((300, iy), line, font=body_font, fill=FAMILY_LOG_TEXT)
-        iy += 34
-    y = iy + 14
-    draw.text((110, y), 'Mensagem:', font=label_font, fill=FAMILY_LOG_MUTED)
-    iy = y
-    for line in msg_lines:
-        draw.text((300, iy), line, font=body_font, fill=FAMILY_LOG_TEXT)
-        iy += 34
-    stamp = _agora_brasil_str('%d/%m/%Y %H:%M')
-    draw.text((760, 500), stamp, font=small_font, fill=FAMILY_LOG_MUTED)
-    bio = BytesIO()
-    rgba.convert('RGB').save(bio, format='PNG')
-    bio.seek(0)
-    return bio
-
-
-async def _send_family_log(guild: discord.Guild, member=None, title='Log de Família', reason='', action='', message_text='', audit_action=None, family=None, target=None, details=None):
-    payload = dict(details or {})
-    payload.setdefault('title', title)
-    payload.setdefault('reason', reason)
-    payload.setdefault('action_text', action)
-    payload.setdefault('message_text', message_text)
+async def _send_family_log(guild: discord.Guild, member=None, title='Log de Família', reason='', action='', message_text='', family=None, target=None, audit_action=None):
     try:
         if guild:
-            await postgres_log_family_action(
-                action=audit_action or _guess_family_audit_action(title, action, reason),
-                guild=guild,
-                actor=member,
-                family=family,
-                target=target,
-                details=payload,
-            )
+            _family_audit(guild, audit_action or 'family_log', actor=member, family=family, target=target, details=f'reason={reason} | action={action} | message={message_text}')
     except Exception:
         traceback.print_exc()
     try:
-        data = _family_db_load()
-        bucket = _family_bucket(data, guild.id)
-        channel_id = bucket.get('family_log_channel_id')
+        channel_id = _family_log_channel_id(guild.id)
         if not channel_id:
             return
         canal = guild.get_channel(int(channel_id))
         if canal is None:
             return
         perms = canal.permissions_for(guild.me or guild.get_member(bot.user.id)) if guild and bot.user else None
-        if perms and perms.send_messages and perms.attach_files:
-            image_bytes = await _build_family_log_image(guild, member=member, title=title, reason=reason, action=action, message_text=message_text)
-            await canal.send(file=discord.File(fp=image_bytes, filename='family_log.png'))
+        if perms and perms.send_messages:
+            embed = discord.Embed(title=title, description=f'**Motivo:** {reason or "-"}\n**Ação:** {action or "-"}\n**Mensagem:** {message_text or "-"}', color=int((family.color if family else '#2ecc71')[1:], 16) if family else 0x2ecc71)
+            if family and family.image_url:
+                embed.set_thumbnail(url=family.image_url)
+            await canal.send(embed=embed)
     except Exception:
         traceback.print_exc()
 
-# ==================== OPERAÇÕES DE FAMÍLIA ====================
-async def _family_create(interaction: discord.Interaction, name: str, color_str: str):
-    data = _family_db_load()
-    bucket = _family_bucket(data, interaction.guild_id)
-    if not _family_has_admin(interaction, bucket):
-        raise PermissionError('Você não tem permissão para criar famílias.')
-    slug = _family_slug(name)
-    if slug in bucket['families']:
-        raise ValueError('Já existe uma família com esse nome.')
-    discord_color, hex_color = _family_parse_color(color_str)
-    role = await interaction.guild.create_role(name=name, colour=discord_color, reason=f'Família criada por {interaction.user}')
-    family = {
-        'name': name,
-        'role_id': role.id,
-        'color': hex_color,
-        'image_url': '',
-        'members': [interaction.user.id],
-        'leader_id': interaction.user.id,
-        'created_by': interaction.user.id,
-        'created_at': datetime.utcnow().isoformat(),
-    }
-    bucket['families'][slug] = family
-    if isinstance(interaction.user, discord.Member):
-        await _family_remove_member_from_other_families(interaction.guild, bucket, interaction.user, keep_slug=slug)
-        try:
-            await interaction.user.add_roles(role, reason='Criador da família')
-        except Exception:
-            traceback.print_exc()
-    _family_db_save(data)
-    await _send_family_log(interaction.guild, member=interaction.user, title='Família criada', reason=f'Família {name} criada', action=f'Cargo criado: {role.name}', message_text=f'Cor: {hex_color}')
-    return family, role
+
+async def _family_remove_member_from_other_families(guild: discord.Guild, member: discord.Member, keep_slug=None):
+    rows = _pg_exec(f'''SELECT family_slug FROM {PG_TABLE_FAMILY_MEMBERS} WHERE guild_id = %s AND user_id = %s''', (guild.id, member.id), fetch=True) or []
+    for (family_slug,) in rows:
+        if keep_slug and family_slug == keep_slug:
+            continue
+        old_family = _family_get(guild.id, family_slug)
+        _pg_exec(f'''DELETE FROM {PG_TABLE_FAMILY_MEMBERS} WHERE guild_id = %s AND family_slug = %s AND user_id = %s''', (guild.id, family_slug, member.id))
+        if old_family and old_family.role_id:
+            role = guild.get_role(old_family.role_id)
+            if role and role in member.roles:
+                try:
+                    await member.remove_roles(role, reason='Mudança de família')
+                except Exception:
+                    traceback.print_exc()
+
+
+async def _family_add_member(guild: discord.Guild, family, member: discord.Member):
+    await _family_remove_member_from_other_families(guild, member, keep_slug=family.slug)
+    _pg_exec(f'''INSERT INTO {PG_TABLE_FAMILY_MEMBERS} (guild_id, family_slug, user_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING''', (guild.id, family.slug, member.id))
+    if family.role_id:
+        role = guild.get_role(family.role_id)
+        if role and role not in member.roles:
+            try:
+                await member.add_roles(role, reason=f'Entrada na família {family.name}')
+            except Exception:
+                traceback.print_exc()
+
+
+async def _family_remove_member(guild: discord.Guild, family, member: discord.Member):
+    _pg_exec(f'''DELETE FROM {PG_TABLE_FAMILY_MEMBERS} WHERE guild_id = %s AND family_slug = %s AND user_id = %s''', (guild.id, family.slug, member.id))
+    if family.role_id:
+        role = guild.get_role(family.role_id)
+        if role and role in member.roles:
+            try:
+                await member.remove_roles(role, reason=f'Saída da família {family.name}')
+            except Exception:
+                traceback.print_exc()
 
 
 class _FamilyInviteView(discord.ui.View):
@@ -1747,676 +1349,411 @@ class _FamilyInviteView(discord.ui.View):
     @discord.ui.button(label='✅ Aceitar', style=discord.ButtonStyle.success)
     async def accept_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.invited_user_id:
-            return await interaction.response.send_message('Esse convite não é para você.', ephemeral=True)
-        data = _family_db_load()
-        bucket = _family_bucket(data, self.guild_id)
-        invite = bucket.get('pending_invites', {}).get(str(self.invited_user_id))
-        if not invite:
-            return await interaction.response.send_message('Esse convite expirou ou já foi usado.', ephemeral=True)
-        if invite.get('family_slug') != self.family_slug:
-            return await interaction.response.send_message('Convite inválido.', ephemeral=True)
-        slug, family = _family_find_by_slug(bucket, self.family_slug)
-        if not family:
-            bucket['pending_invites'].pop(str(self.invited_user_id), None)
-            _family_db_save(data)
-            return await interaction.response.send_message('A família não existe mais.', ephemeral=True)
+            return await interaction.response.send_message('❌ Esse convite não é seu.', ephemeral=True)
         guild = bot.get_guild(self.guild_id)
         if guild is None:
-            return await interaction.response.send_message('Servidor não encontrado.', ephemeral=True)
+            return await interaction.response.send_message('❌ Não encontrei o servidor desse convite.', ephemeral=True)
+        invite = _pg_exec(f'''SELECT invited_by FROM {PG_TABLE_FAMILY_INVITES} WHERE guild_id = %s AND family_slug = %s AND user_id = %s''', (self.guild_id, self.family_slug, self.invited_user_id), fetchone=True)
+        if not invite:
+            return await interaction.response.send_message('❌ Esse convite já expirou ou foi removido.', ephemeral=True)
+        family = _family_get(self.guild_id, self.family_slug)
+        if family is None:
+            return await interaction.response.send_message('❌ A família desse convite não existe mais.', ephemeral=True)
         member = guild.get_member(self.invited_user_id)
         if member is None:
-            return await interaction.response.send_message('Membro não encontrado no servidor.', ephemeral=True)
-        await _family_remove_member_from_other_families(guild, bucket, member, keep_slug=slug)
-        if member.id not in family['members']:
-            family['members'].append(member.id)
-        role = guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role and role not in member.roles:
-            await member.add_roles(role, reason=f'Convite aceito para a família {family.get("name")}')
-        bucket['pending_invites'].pop(str(self.invited_user_id), None)
-        _family_db_save(data)
-        await _send_family_log(guild, member=member, title='Convite de família aceito', reason=f'Família: {family.get("name")}', action='Usuário aceitou o convite', message_text='Convite aceito via DM')
+            return await interaction.response.send_message('❌ Você não está mais no servidor.', ephemeral=True)
+        _pg_exec(f'''DELETE FROM {PG_TABLE_FAMILY_INVITES} WHERE guild_id = %s AND family_slug = %s AND user_id = %s''', (self.guild_id, self.family_slug, self.invited_user_id))
+        await _family_add_member(guild, family, member)
+        await _send_family_log(guild, member=member, title='Convite de família aceito', reason=f'Família: {family.name}', action='Usuário aceitou o convite', message_text='Convite aceito via DM', family=family, audit_action='invite_accepted')
         for item in self.children:
             item.disabled = True
-        await interaction.response.edit_message(content=f'✅ Você entrou na família **{family.get("name")}**.', view=self)
+        await interaction.response.edit_message(content=f'✅ Você entrou na família **{family.name}**.', view=self)
 
     @discord.ui.button(label='❌ Recusar', style=discord.ButtonStyle.danger)
     async def decline_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.invited_user_id:
-            return await interaction.response.send_message('Esse convite não é para você.', ephemeral=True)
-        data = _family_db_load()
-        bucket = _family_bucket(data, self.guild_id)
-        bucket.get('pending_invites', {}).pop(str(self.invited_user_id), None)
-        _family_db_save(data)
+            return await interaction.response.send_message('❌ Esse convite não é seu.', ephemeral=True)
+        family = _family_get(self.guild_id, self.family_slug)
+        _pg_exec(f'''DELETE FROM {PG_TABLE_FAMILY_INVITES} WHERE guild_id = %s AND family_slug = %s AND user_id = %s''', (self.guild_id, self.family_slug, self.invited_user_id))
         guild = bot.get_guild(self.guild_id)
-        if guild:
-            await _send_family_log(guild, member=interaction.user, title='Convite de família recusado', reason='Convite recusado', action=f'Família slug: {self.family_slug}', message_text='Convite recusado via DM')
+        if guild and family:
+            await _send_family_log(guild, member=interaction.user, title='Convite de família recusado', reason='Convite recusado', action=f'Família: {family.name}', message_text='Convite recusado via DM', family=family, audit_action='invite_declined')
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content='❌ Você recusou o convite.', view=self)
 
 
 async def _family_send_invite(interaction: discord.Interaction, selected_slug: str, member: discord.Member):
-    data = _family_db_load()
-    bucket = _family_bucket(data, interaction.guild_id)
-    slug, family = _family_find_by_slug(bucket, selected_slug)
+    family = _family_get(interaction.guild_id, selected_slug)
     if not family:
         raise ValueError('Família não encontrada.')
-    if not _family_can_manage(interaction, bucket, family):
+    if not _family_can_manage(interaction, family):
         raise PermissionError('Você não pode gerenciar essa família.')
     if member.bot:
         raise ValueError('Não é permitido convidar bots.')
-    pending = bucket.setdefault('pending_invites', {})
-    existing = pending.get(str(member.id))
-    if existing and existing.get('family_slug') == selected_slug:
-        raise ValueError('Já existe um convite pendente para esse membro.')
-    pending[str(member.id)] = {
-        'family_slug': selected_slug,
-        'invited_by': interaction.user.id,
-        'created_at': datetime.utcnow().isoformat(),
-    }
-    _family_db_save(data)
+    _pg_exec(f'''INSERT INTO {PG_TABLE_FAMILY_INVITES} (guild_id, family_slug, user_id, invited_by) VALUES (%s, %s, %s, %s) ON CONFLICT (guild_id, family_slug, user_id) DO UPDATE SET invited_by = EXCLUDED.invited_by, created_at = NOW()''', (interaction.guild_id, selected_slug, member.id, interaction.user.id))
+    embed = discord.Embed(title='📨 Convite para família', description=(f'Você foi convidado para entrar na família **{family.name}**.\n\n**Convidado por:** {interaction.user.mention}\n**Família:** {family.name}\n**Cor:** `{family.color}`\n\nDeseja aceitar?'), color=int(family.color[1:], 16))
+    if family.image_url:
+        embed.set_thumbnail(url=family.image_url)
     view = _FamilyInviteView(member.id, interaction.guild_id, selected_slug, interaction.user.id)
-    embed = _family_build_embed(
-        '📨 Convite para família',
-        (
-            f'Você foi convidado para entrar na família **{family.get("name")}**.\n\n'
-            f'**Convidado por:** {interaction.user.mention}\n'
-            f'**Família:** {family.get("name")}\n'
-            f'**Cor:** `{family.get("color")}`\n\n'
-            f'Deseja aceitar?'
-        ),
-        int(family.get('color', '#7c5cff')[1:], 16),
-    )
-    if family.get('image_url'):
-        embed.set_thumbnail(url=family['image_url'])
     try:
         await member.send(embed=embed, view=view)
     except discord.Forbidden:
-        pending.pop(str(member.id), None)
-        _family_db_save(data)
         raise ValueError('Não foi possível enviar a DM. O usuário está com DMs fechadas.')
-    await _send_family_log(interaction.guild, member=interaction.user, title='Convite de família enviado', reason=f'Família: {family.get("name")}', action=f'Convite enviado para {member}', message_text='Aguardando resposta na DM')
+    await _send_family_log(interaction.guild, member=interaction.user, title='Convite de família enviado', reason=f'Família: {family.name}', action=f'Convite enviado para {member}', message_text='Aguardando resposta na DM', family=family, target=member, audit_action='invite_sent')
     return family
-
-# Painel
-class _FamilyCreateModal(discord.ui.Modal, title='Criar Família'):
-    family_name = discord.ui.TextInput(label='Nome da família', max_length=60, required=True)
-    family_color = discord.ui.TextInput(label='Cor (#RRGGBB)', default='#7c5cff', max_length=7, required=False)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            family, role = await _family_create(interaction, str(self.family_name.value), str(self.family_color.value or '#7c5cff'))
-            await interaction.response.send_message(embed=_family_build_embed('✅ Família criada', f'**Nome:** {family["name"]}\n**Cargo:** {role.mention}\n**Cor:** `{family["color"]}`\n**Líder:** {interaction.user.mention}', int(family['color'][1:], 16)), ephemeral=True)
-        except PermissionError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except ValueError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except Exception:
-            traceback.print_exc()
-            await interaction.response.send_message('Falha ao criar a família.', ephemeral=True)
-
-
-class _FamilyRenameModal(discord.ui.Modal, title='Renomear Família'):
-    new_name = discord.ui.TextInput(label='Novo nome', max_length=60, required=True)
-
-    def __init__(self, selected_slug: str):
-        super().__init__()
-        self.selected_slug = selected_slug
-
-    async def on_submit(self, interaction: discord.Interaction):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        slug, family = _family_find_by_slug(bucket, self.selected_slug)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode renomear essa família.', ephemeral=True)
-        new_slug = _family_slug(str(self.new_name.value))
-        if new_slug != slug and new_slug in bucket['families']:
-            return await interaction.response.send_message('Já existe outra família com esse nome.', ephemeral=True)
-        role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role:
-            await role.edit(name=str(self.new_name.value), reason=f'Renomeada por {interaction.user}')
-        old_name = family['name']
-        family['name'] = str(self.new_name.value)
-        if new_slug != slug:
-            bucket['families'].pop(slug)
-            bucket['families'][new_slug] = family
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família renomeada', reason='Nome alterado', action=f'{old_name} → {self.new_name.value}', message_text='')
-        await interaction.response.send_message(f'✅ Família renomeada para **{self.new_name.value}**.', ephemeral=True)
-
-
-class _FamilyColorModal(discord.ui.Modal, title='Alterar Cor da Família'):
-    new_color = discord.ui.TextInput(label='Nova cor (#RRGGBB)', default='#7c5cff', max_length=7, required=True)
-
-    def __init__(self, selected_slug: str):
-        super().__init__()
-        self.selected_slug = selected_slug
-
-    async def on_submit(self, interaction: discord.Interaction):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        slug, family = _family_find_by_slug(bucket, self.selected_slug)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode alterar a cor dessa família.', ephemeral=True)
-        try:
-            discord_color, hex_color = _family_parse_color(str(self.new_color.value))
-        except ValueError as e:
-            return await interaction.response.send_message(str(e), ephemeral=True)
-        role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role:
-            await role.edit(colour=discord_color, reason=f'Cor da família alterada por {interaction.user}')
-        family['color'] = hex_color
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Cor de família alterada', reason=f'Família: {family.get("name")}', action=f'Nova cor: {hex_color}', message_text='')
-        await interaction.response.send_message(f'✅ Cor da família **{family.get("name")}** alterada para `{hex_color}`.', ephemeral=True)
-
-
-class _FamilyPhotoModal(discord.ui.Modal, title='Alterar Foto da Família'):
-    photo_url = discord.ui.TextInput(label='URL da foto', style=discord.TextStyle.paragraph, required=True)
-
-    def __init__(self, selected_slug: str):
-        super().__init__()
-        self.selected_slug = selected_slug
-
-    async def on_submit(self, interaction: discord.Interaction):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        slug, family = _family_find_by_slug(bucket, self.selected_slug)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode alterar a foto dessa família.', ephemeral=True)
-        url = str(self.photo_url.value).strip()
-        family['image_url'] = url
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Foto de família alterada', reason=f'Família: {family.get("name")}', action='Foto atualizada', message_text=url)
-        await interaction.response.send_message(f'✅ Foto da família **{family.get("name")}** atualizada.', ephemeral=True)
-
-
-class _FamilySelect(discord.ui.Select):
-    def __init__(self, parent_view: '_FamilyPanelView', interaction: discord.Interaction):
-        self.parent_view = parent_view
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        families = bucket.get('families', {})
-        options = []
-        for slug, fam in list(families.items())[:25]:
-            options.append(discord.SelectOption(label=fam.get('name', slug)[:100], value=slug, description=f"{len(fam.get('members', []))} membro(s)"[:100]))
-        if not options:
-            options = [discord.SelectOption(label='Nenhuma família', value='__none__', description='Crie uma família primeiro')]
-        super().__init__(placeholder='Selecione uma família do painel', min_values=1, max_values=1, options=options, row=0)
-
-    async def callback(self, interaction: discord.Interaction):
-        value = self.values[0]
-        if value == '__none__':
-            self.parent_view.selected_slug = None
-            return await interaction.response.send_message('Nenhuma família disponível ainda.', ephemeral=True)
-        self.parent_view.selected_slug = value
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        _, family = _family_find_by_slug(bucket, value)
-        if family:
-            selected_member = interaction.guild.get_member(self.parent_view.selected_member_id) if self.parent_view.selected_member_id else None
-            embed = _family_build_details_embed(interaction.guild, family, selected_member)
-            await interaction.response.edit_message(embed=embed, view=self.parent_view)
-        else:
-            await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-
-
-class _FamilyMemberUserSelect(discord.ui.UserSelect):
-    def __init__(self, parent_view: '_FamilyPanelView'):
-        self.parent_view = parent_view
-        super().__init__(placeholder='Selecione um membro para convidar/remover no painel', min_values=1, max_values=1, row=1)
-
-    async def callback(self, interaction: discord.Interaction):
-        user = self.values[0]
-        member = interaction.guild.get_member(user.id)
-        if member is None:
-            self.parent_view.selected_member_id = None
-            return await interaction.response.send_message('O usuário selecionado não está no servidor.', ephemeral=True)
-        self.parent_view.selected_member_id = member.id
-        if self.parent_view.selected_slug:
-            data = _family_db_load()
-            bucket = _family_bucket(data, interaction.guild_id)
-            _, family = _family_find_by_slug(bucket, self.parent_view.selected_slug)
-            if family:
-                embed = _family_build_details_embed(interaction.guild, family, member)
-                return await interaction.response.edit_message(embed=embed, view=self.parent_view)
-        await interaction.response.send_message(f'Membro selecionado no painel: {member.mention}', ephemeral=True)
 
 
 class _FamilyPanelView(discord.ui.View):
     def __init__(self, interaction: discord.Interaction):
-        super().__init__(timeout=300)
-        self.selected_slug = None
-        self.selected_member_id = None
-        self.add_item(_FamilySelect(self, interaction))
-        self.add_item(_FamilyMemberUserSelect(self))
+        super().__init__(timeout=180)
+        self.requester_id = interaction.user.id
 
-    def _get_selected(self, interaction: discord.Interaction):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        family = None
-        slug = None
-        if self.selected_slug:
-            slug, family = _family_find_by_slug(bucket, self.selected_slug)
-        member = interaction.guild.get_member(self.selected_member_id) if self.selected_member_id else None
-        return data, bucket, slug, family, member
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message('❌ Esse painel não é seu.', ephemeral=True)
+            return False
+        return True
 
-    @discord.ui.button(label='➕ Criar', style=discord.ButtonStyle.success, row=2)
-    async def create_family(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(_FamilyCreateModal())
-
-    @discord.ui.button(label='👁️ Ver', style=discord.ButtonStyle.secondary, row=2)
-    async def view_family(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data, bucket, slug, family, member = self._get_selected(interaction)
-        if not family:
-            return await interaction.response.send_message('Selecione uma família primeiro no menu.', ephemeral=True)
-        embed = _family_build_details_embed(interaction.guild, family, member)
+    @discord.ui.button(label='📚 Listar famílias', style=discord.ButtonStyle.primary)
+    async def listar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        familias = _family_list(interaction.guild_id)
+        if not familias:
+            return await interaction.response.send_message('📭 Nenhuma família cadastrada.', ephemeral=True)
+        embed = discord.Embed(title='Famílias cadastradas', color=0x7c5cff)
+        for fam in familias[:25]:
+            embed.add_field(name=fam.name, value=f'`{fam.slug}` • {_family_member_count(interaction.guild_id, fam.slug)} membro(s)', inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label='✏️ Renomear', style=discord.ButtonStyle.primary, row=2)
-    async def rename_family(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data, bucket, slug, family, member = self._get_selected(interaction)
-        if not family:
-            return await interaction.response.send_message('Selecione uma família primeiro no menu.', ephemeral=True)
-        await interaction.response.send_modal(_FamilyRenameModal(slug))
+    @discord.ui.button(label='👤 Minha família', style=discord.ButtonStyle.secondary)
+    async def minha_familia(self, interaction: discord.Interaction, button: discord.ui.Button):
+        fam = _family_current_of_user(interaction.guild_id, interaction.user.id)
+        if not fam:
+            return await interaction.response.send_message('📭 Você não está em nenhuma família.', ephemeral=True)
+        members = _family_member_count(interaction.guild_id, fam.slug)
+        await interaction.response.send_message(f'🏡 Você está na família **{fam.name}** (`{fam.slug}`) com **{members}** membro(s).', ephemeral=True)
 
-    @discord.ui.button(label='🎨 Cor', style=discord.ButtonStyle.primary, row=2)
-    async def recolor_family(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data, bucket, slug, family, member = self._get_selected(interaction)
-        if not family:
-            return await interaction.response.send_message('Selecione uma família primeiro no menu.', ephemeral=True)
-        await interaction.response.send_modal(_FamilyColorModal(slug))
-
-    @discord.ui.button(label='🖼️ Foto', style=discord.ButtonStyle.primary, row=3)
-    async def photo_family(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data, bucket, slug, family, member = self._get_selected(interaction)
-        if not family:
-            return await interaction.response.send_message('Selecione uma família primeiro no menu.', ephemeral=True)
-        await interaction.response.send_modal(_FamilyPhotoModal(slug))
-
-    @discord.ui.button(label='📨 Convidar', style=discord.ButtonStyle.success, row=3)
-    async def invite_member_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data, bucket, slug, family, member = self._get_selected(interaction)
-        if not family:
-            return await interaction.response.send_message('Selecione uma família primeiro no menu.', ephemeral=True)
-        if not member:
-            return await interaction.response.send_message('Selecione um membro no seletor de usuários primeiro.', ephemeral=True)
-        try:
-            family = await _family_send_invite(interaction, slug, member)
-            embed = _family_build_details_embed(interaction.guild, family, member)
-            await interaction.response.edit_message(embed=embed, view=self)
-            await interaction.followup.send(f'📨 Convite enviado para {member.mention}. Agora a pessoa precisa aceitar na DM.', ephemeral=True)
-        except PermissionError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except ValueError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except Exception:
-            traceback.print_exc()
-            await interaction.response.send_message('Falha ao enviar o convite.', ephemeral=True)
-
-    @discord.ui.button(label='➖ Remover', style=discord.ButtonStyle.danger, row=3)
-    async def remove_member_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data, bucket, slug, family, member = self._get_selected(interaction)
-        if not family:
-            return await interaction.response.send_message('Selecione uma família primeiro no menu.', ephemeral=True)
-        if not member:
-            return await interaction.response.send_message('Selecione um membro no seletor de usuários primeiro.', ephemeral=True)
-        try:
-            if not _family_can_manage(interaction, bucket, family):
-                raise PermissionError('Você não pode gerenciar essa família.')
-            if member.id not in family.get('members', []):
-                raise ValueError('Esse membro não está nessa família.')
-            family['members'].remove(member.id)
-            role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-            if role and role in member.roles:
-                await member.remove_roles(role, reason=f'Removido da família {family.get("name")}')
-            _family_db_save(data)
-            await _send_family_log(interaction.guild, member=interaction.user, title='Membro removido da família', reason=f'Família: {family.get("name")}', action=f'Membro removido: {member}', message_text='')
-            embed = _family_build_details_embed(interaction.guild, family, member)
-            await interaction.response.edit_message(embed=embed, view=self)
-            await interaction.followup.send(f'✅ {member.mention} foi removido da família **{family.get("name")}**.', ephemeral=True)
-        except PermissionError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except ValueError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except Exception:
-            traceback.print_exc()
-            await interaction.response.send_message('Falha ao remover membro.', ephemeral=True)
-
-    @discord.ui.button(label='🏆 Ranking', style=discord.ButtonStyle.secondary, row=4)
-    async def rank_family(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        families = list(bucket.get('families', {}).values())
-        if not families:
-            return await interaction.response.send_message('Nenhuma família cadastrada ainda.', ephemeral=True)
-        families.sort(key=lambda f: len(f.get('members', [])), reverse=True)
-        lines = []
-        for idx, fam in enumerate(families[:10], start=1):
-            lines.append(f"**{idx}.** {fam.get('name')} — {len(fam.get('members', []))} membro(s)")
-        await interaction.response.send_message(embed=_family_build_embed('Ranking de Famílias', '\n'.join(lines)), ephemeral=True)
-
-    @discord.ui.button(label='🗑️ Deletar', style=discord.ButtonStyle.danger, row=4)
-    async def delete_family(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data, bucket, slug, family, member = self._get_selected(interaction)
-        if not family:
-            return await interaction.response.send_message('Selecione uma família primeiro no menu.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode deletar essa família.', ephemeral=True)
-        role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role:
-            try:
-                await role.delete(reason=f'Família deletada por {interaction.user}')
-            except Exception:
-                traceback.print_exc()
-        bucket['families'].pop(slug, None)
-        _family_db_save(data)
-        self.selected_slug = None
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família deletada', reason=f'Família removida: {family.get("name")}', action='Cargo e registro apagados', message_text='')
-        await interaction.response.send_message(f'🗑️ Família **{family.get("name")}** deletada com sucesso.', ephemeral=True)
-
-    @discord.ui.button(label='❓ Ajuda', style=discord.ButtonStyle.secondary, row=4)
-    async def help_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message('Painel V4: selecione a família no primeiro menu e o membro no seletor de usuários. Depois use o botão 📨 Convidar para enviar um convite na DM da pessoa. A pessoa só entra na família se aceitar.', ephemeral=True)
+    @discord.ui.button(label='🧾 Últimos logs', style=discord.ButtonStyle.success)
+    async def ultimos_logs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rows = _pg_exec(f'''SELECT action, family_name, created_at FROM {PG_TABLE_FAMILY_AUDIT} WHERE guild_id = %s ORDER BY created_at DESC LIMIT 10''', (interaction.guild_id,), fetch=True) or []
+        if not rows:
+            return await interaction.response.send_message('📭 Nenhum log registrado ainda.', ephemeral=True)
+        text = '\n'.join([f'`{r[2]}` • **{r[0]}** • {r[1] or "-"}' for r in rows])
+        await interaction.response.send_message(text[:1900], ephemeral=True)
 
 
 async def _family_name_autocomplete(interaction: discord.Interaction, current: str):
-    data = _family_db_load()
-    bucket = _family_bucket(data, interaction.guild_id)
-    families = bucket.get('families', {})
-    current_l = current.lower().strip()
+    if not interaction.guild_id:
+        return []
+    current_l = normalize_text(current)
     out = []
-    for slug, fam in families.items():
-        name = fam.get('name', slug)
-        if not current_l or current_l in name.lower():
-            out.append(app_commands.Choice(name=name[:100], value=name[:100]))
+    for fam in _family_list(interaction.guild_id):
+        if not current_l or current_l in normalize_text(fam.name) or current_l in fam.slug:
+            out.append(app_commands.Choice(name=fam.name[:100], value=fam.slug[:100]))
         if len(out) >= 25:
             break
     return out
 
 
 def setup_family_system():
-    if getattr(bot, '_family_system_v4_registered', False):
+    if getattr(bot, '_family_pg_registered', False):
         return
-    bot._family_system_v4_registered = True
-    guild_obj = discord.Object(id=int(SEU_ID_DO_SERVIDOR))
-    family_group = app_commands.Group(name='familia', description='Sistema de famílias do servidor')
+    bot._family_pg_registered = True
+    guild_obj = discord.Object(id=int(SEU_ID_DO_SERVIDOR)) if SEU_ID_DO_SERVIDOR else None
+    family_group = app_commands.Group(name='familia', description='Sistema de famílias do servidor (PostgreSQL)')
 
-    @family_group.command(name='painel', description='Abre o painel interativo de famílias (V4)')
+    @family_group.command(name='painel', description='Abre o painel interativo de famílias')
     async def familia_painel(interaction: discord.Interaction):
-        embed = _family_build_embed(
-            'Painel de Famílias • V4',
-            'Selecione uma família no menu e um membro no seletor de usuários.\n\nUse o botão 📨 Convidar para enviar um convite na DM da pessoa, e o botão ➖ Remover para retirar membros já participantes.',
-        )
+        embed = discord.Embed(title='Painel de Famílias (PostgreSQL)', description='Use os botões abaixo para consultas rápidas e os comandos /familia para gerenciar tudo.', color=0x7c5cff)
         await interaction.response.send_message(embed=embed, view=_FamilyPanelView(interaction), ephemeral=True)
 
     @family_group.command(name='setlog', description='Define o canal de logs das famílias')
     @app_commands.describe(canal='Canal onde os logs de famílias serão enviados')
     async def familia_setlog(interaction: discord.Interaction, canal: discord.TextChannel):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        if not _family_has_admin(interaction, bucket):
+        if not _family_has_admin(interaction):
             return await interaction.response.send_message('❌ Você não tem permissão para definir o canal de log das famílias.', ephemeral=True)
-        bucket['family_log_channel_id'] = canal.id
-        _family_db_save(data)
+        _pg_exec(f'''INSERT INTO {PG_TABLE_FAMILY_SETTINGS} (guild_id, family_log_channel_id, updated_at) VALUES (%s, %s, NOW()) ON CONFLICT (guild_id) DO UPDATE SET family_log_channel_id = EXCLUDED.family_log_channel_id, updated_at = NOW()''', (interaction.guild_id, canal.id))
+        _family_audit(interaction.guild, 'set_log_channel', actor=interaction.user, details=f'channel_id={canal.id}')
         await interaction.response.send_message(f'✅ Canal de log das famílias definido para {canal.mention}.', ephemeral=True)
 
     @family_group.command(name='autorizarcargo', description='Autoriza um cargo para gerenciar famílias')
     @app_commands.describe(cargo='Cargo autorizado a criar/gerenciar famílias')
     async def familia_autorizarcargo(interaction: discord.Interaction, cargo: discord.Role):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
         if not _family_is_owner(interaction):
-            return await interaction.response.send_message('Apenas o dono configurado pode autorizar cargos.', ephemeral=True)
-        if cargo.id in bucket['authorized_roles']:
-            return await interaction.response.send_message('Esse cargo já está autorizado.', ephemeral=True)
-        bucket['authorized_roles'].append(cargo.id)
-        _family_db_save(data)
+            return await interaction.response.send_message('❌ Apenas o dono configurado pode autorizar cargos.', ephemeral=True)
+        _pg_exec(f'INSERT INTO {PG_TABLE_FAMILY_ADMIN_ROLES} (guild_id, role_id) VALUES (%s, %s) ON CONFLICT DO NOTHING', (interaction.guild_id, cargo.id))
         await interaction.response.send_message(f'✅ Cargo autorizado para gerenciar famílias: {cargo.mention}', ephemeral=True)
 
     @family_group.command(name='desautorizarcargo', description='Remove um cargo autorizado')
     @app_commands.describe(cargo='Cargo a remover da lista de autorizados')
     async def familia_desautorizarcargo(interaction: discord.Interaction, cargo: discord.Role):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
         if not _family_is_owner(interaction):
-            return await interaction.response.send_message('Apenas o dono configurado pode desautorizar cargos.', ephemeral=True)
-        if cargo.id not in bucket['authorized_roles']:
-            return await interaction.response.send_message('Esse cargo não está autorizado.', ephemeral=True)
-        bucket['authorized_roles'].remove(cargo.id)
-        _family_db_save(data)
+            return await interaction.response.send_message('❌ Apenas o dono configurado pode desautorizar cargos.', ephemeral=True)
+        _pg_exec(f'DELETE FROM {PG_TABLE_FAMILY_ADMIN_ROLES} WHERE guild_id = %s AND role_id = %s', (interaction.guild_id, cargo.id))
         await interaction.response.send_message(f'✅ Cargo removido da lista de autorizados: {cargo.mention}', ephemeral=True)
 
-    @family_group.command(name='autorizados', description='Lista cargos autorizados a gerenciar famílias')
-    async def familia_autorizados(interaction: discord.Interaction):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        roles = []
-        for role_id in bucket.get('authorized_roles', []):
-            role = interaction.guild.get_role(int(role_id))
-            roles.append(role.mention if role else f'`{role_id}` (inexistente)')
-        desc = '\n'.join(roles) if roles else 'Nenhum cargo autorizado ainda.'
-        log_ch = bucket.get('family_log_channel_id')
-        if log_ch:
-            canal = interaction.guild.get_channel(int(log_ch))
-            desc += f"\n\n**Canal de log:** {canal.mention if canal else f'`{log_ch}`'}"
-        await interaction.response.send_message(embed=_family_build_embed('Configurações de Famílias', desc), ephemeral=True)
+    @family_group.command(name='autorizarusuario', description='Autoriza um usuário para gerenciar famílias')
+    @app_commands.describe(usuario='Usuário autorizado a criar/gerenciar famílias')
+    async def familia_autorizarusuario(interaction: discord.Interaction, usuario: discord.Member):
+        if not _family_is_owner(interaction):
+            return await interaction.response.send_message('❌ Apenas o dono configurado pode autorizar usuários.', ephemeral=True)
+        _pg_exec(f'INSERT INTO {PG_TABLE_FAMILY_ADMIN_USERS} (guild_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING', (interaction.guild_id, usuario.id))
+        await interaction.response.send_message(f'✅ Usuário autorizado para gerenciar famílias: {usuario.mention}', ephemeral=True)
+
+    @family_group.command(name='desautorizarusuario', description='Remove um usuário autorizado')
+    @app_commands.describe(usuario='Usuário a remover da lista de autorizados')
+    async def familia_desautorizarusuario(interaction: discord.Interaction, usuario: discord.Member):
+        if not _family_is_owner(interaction):
+            return await interaction.response.send_message('❌ Apenas o dono configurado pode desautorizar usuários.', ephemeral=True)
+        _pg_exec(f'DELETE FROM {PG_TABLE_FAMILY_ADMIN_USERS} WHERE guild_id = %s AND user_id = %s', (interaction.guild_id, usuario.id))
+        await interaction.response.send_message(f'✅ Usuário removido da lista de autorizados: {usuario.mention}', ephemeral=True)
 
     @family_group.command(name='criar', description='Cria uma nova família')
-    @app_commands.describe(nome='Nome da família', cor='Cor da família em #RRGGBB')
-    async def familia_criar(interaction: discord.Interaction, nome: str, cor: str | None = '#7c5cff'):
-        try:
-            family, role = await _family_create(interaction, nome, cor or '#7c5cff')
-            await interaction.response.send_message(embed=_family_build_embed('✅ Família criada', f'**Nome:** {nome}\n**Cargo:** {role.mention}\n**Cor:** `{family["color"]}`\n**Líder:** {interaction.user.mention}', int(family['color'][1:], 16)), ephemeral=True)
-        except PermissionError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except ValueError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except Exception:
-            traceback.print_exc()
-            await interaction.response.send_message('Falha ao criar a família.', ephemeral=True)
-
-    @family_group.command(name='listar', description='Lista todas as famílias cadastradas')
-    async def familia_listar(interaction: discord.Interaction):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        families = bucket.get('families', {})
-        if not families:
-            return await interaction.response.send_message('Nenhuma família cadastrada ainda.', ephemeral=True)
-        lines = []
-        for slug, fam in families.items():
-            role = interaction.guild.get_role(int(fam.get('role_id', 0))) if fam.get('role_id') else None
-            lines.append(f"• **{fam.get('name')}** — {len(fam.get('members', []))} membro(s) — cargo: {role.mention if role else '`não encontrado`'}")
-        await interaction.response.send_message(embed=_family_build_embed('Famílias cadastradas', '\n'.join(lines)), ephemeral=True)
-
-    @family_group.command(name='ver', description='Mostra os detalhes de uma família')
-    @app_commands.describe(nome='Nome da família')
-    @app_commands.autocomplete(nome=_family_name_autocomplete)
-    async def familia_ver(interaction: discord.Interaction, nome: str):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        _, family = _family_find(bucket, nome)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        await interaction.response.send_message(embed=_family_build_details_embed(interaction.guild, family), ephemeral=True)
-
-    @family_group.command(name='renomear', description='Renomeia uma família')
-    @app_commands.describe(familia='Família atual', novo_nome='Novo nome da família')
-    @app_commands.autocomplete(familia=_family_name_autocomplete)
-    async def familia_renomear(interaction: discord.Interaction, familia: str, novo_nome: str):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        slug, family = _family_find(bucket, familia)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode renomear essa família.', ephemeral=True)
-        new_slug = _family_slug(novo_nome)
-        if new_slug != slug and new_slug in bucket['families']:
-            return await interaction.response.send_message('Já existe outra família com esse nome.', ephemeral=True)
-        role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role:
-            await role.edit(name=novo_nome, reason=f'Renomeada por {interaction.user}')
-        old_name = family['name']
-        family['name'] = novo_nome
-        if new_slug != slug:
-            bucket['families'].pop(slug)
-            bucket['families'][new_slug] = family
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família renomeada', reason='Nome alterado', action=f'{old_name} → {novo_nome}', message_text='')
-        await interaction.response.send_message(f'✅ Família renomeada para **{novo_nome}**.', ephemeral=True)
-
-    @family_group.command(name='cor', description='Altera a cor da família e do cargo')
-    @app_commands.describe(familia='Família alvo', cor='Nova cor em #RRGGBB')
-    @app_commands.autocomplete(familia=_family_name_autocomplete)
-    async def familia_cor(interaction: discord.Interaction, familia: str, cor: str):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        _, family = _family_find(bucket, familia)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode alterar a cor dessa família.', ephemeral=True)
+    @app_commands.describe(nome='Nome da família', cor='Cor do cargo (#RRGGBB)')
+    async def familia_criar(interaction: discord.Interaction, nome: str, cor: str = '#7c5cff'):
+        if not _family_has_admin(interaction):
+            return await interaction.response.send_message('❌ Você não tem permissão para criar famílias.', ephemeral=True)
+        slug = _family_slug(nome)
+        if _family_get(interaction.guild_id, slug):
+            return await interaction.response.send_message('❌ Já existe uma família com esse nome.', ephemeral=True)
         try:
             discord_color, hex_color = _family_parse_color(cor)
         except ValueError as e:
-            return await interaction.response.send_message(str(e), ephemeral=True)
-        role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role:
-            await role.edit(colour=discord_color, reason=f'Cor da família alterada por {interaction.user}')
-        family['color'] = hex_color
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Cor de família alterada', reason=f'Família: {family.get("name")}', action=f'Nova cor: {hex_color}', message_text='')
-        await interaction.response.send_message(f'✅ Cor da família **{family.get("name")}** alterada para `{hex_color}`.', ephemeral=True)
-
-    @family_group.command(name='foto', description='Altera a foto da família por URL')
-    @app_commands.describe(familia='Família alvo', url='URL da nova imagem')
-    @app_commands.autocomplete(familia=_family_name_autocomplete)
-    async def familia_foto(interaction: discord.Interaction, familia: str, url: str):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        _, family = _family_find(bucket, familia)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode alterar a foto dessa família.', ephemeral=True)
-        family['image_url'] = url
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Foto de família alterada', reason=f'Família: {family.get("name")}', action='Foto atualizada', message_text=url)
-        await interaction.response.send_message(f'✅ Foto da família **{family.get("name")}** atualizada.', ephemeral=True)
-
-    @family_group.command(name='add', description='Convida um membro para a família')
-    @app_commands.describe(familia='Família alvo', membro='Membro a convidar')
-    @app_commands.autocomplete(familia=_family_name_autocomplete)
-    async def familia_add(interaction: discord.Interaction, familia: str, membro: discord.Member):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        slug, family = _family_find(bucket, familia)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode gerenciar essa família.', ephemeral=True)
-        try:
-            await _family_send_invite(interaction, slug, membro)
-            await interaction.response.send_message(f'📨 Convite enviado para {membro.mention}. Agora a pessoa precisa aceitar na DM.', ephemeral=True)
-        except PermissionError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except ValueError as e:
-            await interaction.response.send_message(str(e), ephemeral=True)
-        except Exception:
-            traceback.print_exc()
-            await interaction.response.send_message('Falha ao enviar o convite.', ephemeral=True)
-
-    @family_group.command(name='remove', description='Remove um membro da família')
-    @app_commands.describe(familia='Família alvo', membro='Membro a remover')
-    @app_commands.autocomplete(familia=_family_name_autocomplete)
-    async def familia_remove(interaction: discord.Interaction, familia: str, membro: discord.Member):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        _, family = _family_find(bucket, familia)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode gerenciar essa família.', ephemeral=True)
-        if membro.id not in family.get('members', []):
-            return await interaction.response.send_message('Esse membro não está nessa família.', ephemeral=True)
-        family['members'].remove(membro.id)
-        role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role and role in membro.roles:
-            await membro.remove_roles(role, reason=f'Removido da família {family.get("name")}')
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Membro removido da família', reason=f'Família: {family.get("name")}', action=f'Membro removido: {membro}', message_text='')
-        await interaction.response.send_message(f'✅ {membro.mention} foi removido da família **{family.get("name")}**.', ephemeral=True)
-
-    @family_group.command(name='deletar', description='Deleta uma família')
-    @app_commands.describe(familia='Família alvo')
-    @app_commands.autocomplete(familia=_family_name_autocomplete)
-    async def familia_deletar(interaction: discord.Interaction, familia: str):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        slug, family = _family_find(bucket, familia)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode deletar essa família.', ephemeral=True)
-        role = interaction.guild.get_role(int(family.get('role_id', 0))) if family.get('role_id') else None
-        if role:
+            return await interaction.response.send_message(f'❌ {e}', ephemeral=True)
+        role = await interaction.guild.create_role(name=nome, colour=discord_color, reason=f'Família criada por {interaction.user}')
+        await _family_remove_member_from_other_families(interaction.guild, interaction.user, keep_slug=slug)
+        def _tx(conn, cur):
+            cur.execute(f'''INSERT INTO {PG_TABLE_FAMILIES} (guild_id, slug, name, role_id, color, leader_id, image_url, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''', (interaction.guild.id, slug, nome, role.id, hex_color, interaction.user.id, '', interaction.user.id))
+            cur.execute(f'''INSERT INTO {PG_TABLE_FAMILY_MEMBERS} (guild_id, family_slug, user_id) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING''', (interaction.guild.id, slug, interaction.user.id))
+        _pg_transaction(_tx)
+        family = _family_get(interaction.guild.id, slug)
+        if role not in interaction.user.roles:
             try:
-                await role.delete(reason=f'Família deletada por {interaction.user}')
+                await interaction.user.add_roles(role, reason='Criador da família')
             except Exception:
                 traceback.print_exc()
-        bucket['families'].pop(slug, None)
-        _family_db_save(data)
-        await _send_family_log(interaction.guild, member=interaction.user, title='Família deletada', reason=f'Família removida: {family.get("name")}', action='Cargo e registro apagados', message_text='')
-        await interaction.response.send_message(f'🗑️ Família **{family.get("name")}** deletada com sucesso.', ephemeral=True)
+        await _send_family_log(interaction.guild, member=interaction.user, title='Família criada', reason=f'Família {nome} criada', action=f'Cargo criado: {role.name}', message_text=f'Cor: {hex_color}', family=family, audit_action='family_created')
+        await interaction.response.send_message(f'✅ Família **{nome}** criada com sucesso.', ephemeral=True)
 
-    @family_group.command(name='sync', description='Sincroniza membros e cargo da família')
-    @app_commands.describe(familia='Família alvo')
+    @family_group.command(name='listar', description='Lista as famílias do servidor')
+    async def familia_listar(interaction: discord.Interaction):
+        familias = _family_list(interaction.guild_id)
+        if not familias:
+            return await interaction.response.send_message('📭 Nenhuma família cadastrada.', ephemeral=True)
+        embed = discord.Embed(title='Famílias cadastradas', color=0x7c5cff)
+        for fam in familias[:25]:
+            embed.add_field(name=fam.name, value=f'Slug: `{fam.slug}` • Membros: **{_family_member_count(interaction.guild_id, fam.slug)}**', inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @family_group.command(name='info', description='Mostra informações de uma família')
+    @app_commands.describe(familia='Nome ou slug da família')
     @app_commands.autocomplete(familia=_family_name_autocomplete)
-    async def familia_sync(interaction: discord.Interaction, familia: str):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        _, family = _family_find(bucket, familia)
-        if not family:
-            return await interaction.response.send_message('Família não encontrada.', ephemeral=True)
-        if not _family_can_manage(interaction, bucket, family):
-            return await interaction.response.send_message('Você não pode sincronizar essa família.', ephemeral=True)
-        await _family_sync_role_to_members(interaction.guild, family)
-        _family_db_save(data)
-        await interaction.response.send_message(f'🔄 Família **{family.get("name")}** sincronizada com o cargo.', ephemeral=True)
+    async def familia_info(interaction: discord.Interaction, familia: str):
+        fam = _family_get(interaction.guild_id, familia)
+        if not fam:
+            return await interaction.response.send_message('❌ Família não encontrada.', ephemeral=True)
+        leader = interaction.guild.get_member(fam.leader_id)
+        members = _family_members(interaction.guild_id, fam.slug)
+        mentions = []
+        for uid in members[:25]:
+            m = interaction.guild.get_member(uid)
+            mentions.append(m.mention if m else str(uid))
+        embed = discord.Embed(title=f'Família • {fam.name}', color=int(fam.color[1:], 16))
+        embed.add_field(name='Slug', value=f'`{fam.slug}`', inline=True)
+        embed.add_field(name='Líder', value=leader.mention if leader else str(fam.leader_id), inline=True)
+        embed.add_field(name='Membros', value=str(len(members)), inline=True)
+        embed.add_field(name='Lista', value=' '.join(mentions) if mentions else 'Nenhum', inline=False)
+        if fam.image_url:
+            embed.set_thumbnail(url=fam.image_url)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @family_group.command(name='ranking', description='Mostra o ranking de famílias por quantidade de membros')
-    async def familia_ranking(interaction: discord.Interaction):
-        data = _family_db_load()
-        bucket = _family_bucket(data, interaction.guild_id)
-        families = list(bucket.get('families', {}).values())
-        if not families:
-            return await interaction.response.send_message('Nenhuma família cadastrada ainda.', ephemeral=True)
-        families.sort(key=lambda f: len(f.get('members', [])), reverse=True)
-        lines = []
-        for idx, fam in enumerate(families[:10], start=1):
-            lines.append(f"**{idx}.** {fam.get('name')} — {len(fam.get('members', []))} membro(s)")
-        await interaction.response.send_message(embed=_family_build_embed('Ranking de Famílias', '\n'.join(lines)), ephemeral=True)
+    @family_group.command(name='convidar', description='Envia convite de família na DM do usuário')
+    @app_commands.describe(familia='Família', membro='Membro a convidar')
+    @app_commands.autocomplete(familia=_family_name_autocomplete)
+    async def familia_convidar(interaction: discord.Interaction, familia: str, membro: discord.Member):
+        try:
+            fam = await _family_send_invite(interaction, familia, membro)
+        except (ValueError, PermissionError) as e:
+            return await interaction.response.send_message(f'❌ {e}', ephemeral=True)
+        await interaction.response.send_message(f'✅ Convite enviado para {membro.mention} na família **{fam.name}**.', ephemeral=True)
 
-    bot.tree.add_command(family_group, guild=guild_obj)
+    @family_group.command(name='remover', description='Remove um membro da família')
+    @app_commands.describe(familia='Família', membro='Membro a remover')
+    @app_commands.autocomplete(familia=_family_name_autocomplete)
+    async def familia_remover(interaction: discord.Interaction, familia: str, membro: discord.Member):
+        fam = _family_get(interaction.guild_id, familia)
+        if not fam:
+            return await interaction.response.send_message('❌ Família não encontrada.', ephemeral=True)
+        if not _family_can_manage(interaction, fam):
+            return await interaction.response.send_message('❌ Você não pode gerenciar essa família.', ephemeral=True)
+        if membro.id == fam.leader_id:
+            return await interaction.response.send_message('❌ Não é possível remover o líder com esse comando.', ephemeral=True)
+        current = _family_current_of_user(interaction.guild_id, membro.id)
+        if not current or current.slug != fam.slug:
+            return await interaction.response.send_message('❌ Esse membro não está nessa família.', ephemeral=True)
+        await _family_remove_member(interaction.guild, fam, membro)
+        await _send_family_log(interaction.guild, member=interaction.user, title='Membro removido da família', reason=f'Família: {fam.name}', action=f'Membro removido: {membro}', message_text='', family=fam, target=membro, audit_action='member_removed')
+        await interaction.response.send_message(f'✅ {membro.mention} foi removido da família **{fam.name}**.', ephemeral=True)
+
+    @family_group.command(name='renomear', description='Renomeia uma família')
+    @app_commands.describe(familia='Família', novo_nome='Novo nome')
+    @app_commands.autocomplete(familia=_family_name_autocomplete)
+    async def familia_renomear(interaction: discord.Interaction, familia: str, novo_nome: str):
+        fam = _family_get(interaction.guild_id, familia)
+        if not fam:
+            return await interaction.response.send_message('❌ Família não encontrada.', ephemeral=True)
+        if not _family_can_manage(interaction, fam):
+            return await interaction.response.send_message('❌ Você não pode gerenciar essa família.', ephemeral=True)
+        novo_slug = _family_slug(novo_nome)
+        existing = _family_get(interaction.guild_id, novo_slug)
+        if existing and existing.slug != fam.slug:
+            return await interaction.response.send_message('❌ Já existe outra família com esse nome.', ephemeral=True)
+        old_name, old_slug = fam.name, fam.slug
+        def _tx(conn, cur):
+            cur.execute(f'UPDATE {PG_TABLE_FAMILIES} SET slug = %s, name = %s, updated_at = NOW() WHERE guild_id = %s AND slug = %s', (novo_slug, novo_nome, interaction.guild_id, old_slug))
+            cur.execute(f'UPDATE {PG_TABLE_FAMILY_MEMBERS} SET family_slug = %s WHERE guild_id = %s AND family_slug = %s', (novo_slug, interaction.guild_id, old_slug))
+            cur.execute(f'UPDATE {PG_TABLE_FAMILY_INVITES} SET family_slug = %s WHERE guild_id = %s AND family_slug = %s', (novo_slug, interaction.guild_id, old_slug))
+        _pg_transaction(_tx)
+        if fam.role_id:
+            role = interaction.guild.get_role(fam.role_id)
+            if role:
+                try:
+                    await role.edit(name=novo_nome, reason=f'Família renomeada por {interaction.user}')
+                except Exception:
+                    traceback.print_exc()
+        fam2 = _family_get(interaction.guild_id, novo_slug)
+        await _send_family_log(interaction.guild, member=interaction.user, title='Família renomeada', reason='Nome alterado', action=f'{old_name} → {novo_nome}', message_text='', family=fam2, audit_action='family_renamed')
+        await interaction.response.send_message(f'✅ Família renomeada para **{novo_nome}**.', ephemeral=True)
+
+    @family_group.command(name='cor', description='Altera a cor da família')
+    @app_commands.describe(familia='Família', cor='Nova cor (#RRGGBB)')
+    @app_commands.autocomplete(familia=_family_name_autocomplete)
+    async def familia_cor(interaction: discord.Interaction, familia: str, cor: str):
+        fam = _family_get(interaction.guild_id, familia)
+        if not fam:
+            return await interaction.response.send_message('❌ Família não encontrada.', ephemeral=True)
+        if not _family_can_manage(interaction, fam):
+            return await interaction.response.send_message('❌ Você não pode gerenciar essa família.', ephemeral=True)
+        try:
+            discord_color, hex_color = _family_parse_color(cor)
+        except ValueError as e:
+            return await interaction.response.send_message(f'❌ {e}', ephemeral=True)
+        _pg_exec(f'UPDATE {PG_TABLE_FAMILIES} SET color = %s, updated_at = NOW() WHERE guild_id = %s AND slug = %s', (hex_color, interaction.guild_id, fam.slug))
+        if fam.role_id:
+            role = interaction.guild.get_role(fam.role_id)
+            if role:
+                try:
+                    await role.edit(colour=discord_color, reason=f'Cor da família alterada por {interaction.user}')
+                except Exception:
+                    traceback.print_exc()
+        fam2 = _family_get(interaction.guild_id, fam.slug)
+        await _send_family_log(interaction.guild, member=interaction.user, title='Cor de família alterada', reason=f'Família: {fam.name}', action=f'Nova cor: {hex_color}', message_text='', family=fam2, audit_action='family_color_updated')
+        await interaction.response.send_message(f'✅ Cor da família **{fam.name}** alterada para `{hex_color}`.', ephemeral=True)
+
+    @family_group.command(name='foto', description='Altera a foto da família')
+    @app_commands.describe(familia='Família', url='URL da foto')
+    @app_commands.autocomplete(familia=_family_name_autocomplete)
+    async def familia_foto(interaction: discord.Interaction, familia: str, url: str):
+        fam = _family_get(interaction.guild_id, familia)
+        if not fam:
+            return await interaction.response.send_message('❌ Família não encontrada.', ephemeral=True)
+        if not _family_can_manage(interaction, fam):
+            return await interaction.response.send_message('❌ Você não pode gerenciar essa família.', ephemeral=True)
+        if not FAMILY_URL_RE.match(url):
+            return await interaction.response.send_message('❌ Envie uma URL válida iniciando com http:// ou https://', ephemeral=True)
+        _pg_exec(f'UPDATE {PG_TABLE_FAMILIES} SET image_url = %s, updated_at = NOW() WHERE guild_id = %s AND slug = %s', (url.strip(), interaction.guild_id, fam.slug))
+        fam2 = _family_get(interaction.guild_id, fam.slug)
+        await _send_family_log(interaction.guild, member=interaction.user, title='Foto de família alterada', reason=f'Família: {fam.name}', action='Foto atualizada', message_text=url.strip(), family=fam2, audit_action='family_photo_updated')
+        await interaction.response.send_message(f'✅ Foto da família **{fam.name}** atualizada.', ephemeral=True)
+
+    @family_group.command(name='deletar', description='Apaga uma família')
+    @app_commands.describe(familia='Família')
+    @app_commands.autocomplete(familia=_family_name_autocomplete)
+    async def familia_deletar(interaction: discord.Interaction, familia: str):
+        fam = _family_get(interaction.guild_id, familia)
+        if not fam:
+            return await interaction.response.send_message('❌ Família não encontrada.', ephemeral=True)
+        if not _family_can_manage(interaction, fam):
+            return await interaction.response.send_message('❌ Você não pode gerenciar essa família.', ephemeral=True)
+        role = interaction.guild.get_role(fam.role_id) if fam.role_id else None
+        members = _family_members(interaction.guild_id, fam.slug)
+        def _tx(conn, cur):
+            cur.execute(f'DELETE FROM {PG_TABLE_FAMILY_MEMBERS} WHERE guild_id = %s AND family_slug = %s', (interaction.guild_id, fam.slug))
+            cur.execute(f'DELETE FROM {PG_TABLE_FAMILY_INVITES} WHERE guild_id = %s AND family_slug = %s', (interaction.guild_id, fam.slug))
+            cur.execute(f'DELETE FROM {PG_TABLE_FAMILIES} WHERE guild_id = %s AND slug = %s', (interaction.guild_id, fam.slug))
+        _pg_transaction(_tx)
+        for uid in members:
+            member = interaction.guild.get_member(uid)
+            if member and role and role in member.roles:
+                try:
+                    await member.remove_roles(role, reason=f'Família {fam.name} apagada')
+                except Exception:
+                    traceback.print_exc()
+        if role:
+            try:
+                await role.delete(reason=f'Família {fam.name} deletada por {interaction.user}')
+            except Exception:
+                traceback.print_exc()
+        await _send_family_log(interaction.guild, member=interaction.user, title='Família deletada', reason=f'Família removida: {fam.name}', action='Cargo e registro apagados', message_text='', family=fam, audit_action='family_deleted')
+        await interaction.response.send_message(f'✅ Família **{fam.name}** deletada com sucesso.', ephemeral=True)
+
+    @family_group.command(name='historico', description='Mostra o histórico recente das famílias')
+    @app_commands.describe(familia='Família (opcional)', limite='Quantidade de registros')
+    @app_commands.autocomplete(familia=_family_name_autocomplete)
+    async def familia_historico(interaction: discord.Interaction, familia: str = None, limite: app_commands.Range[int, 1, 20] = 10):
+        params = [interaction.guild_id]
+        where = 'WHERE guild_id = %s'
+        fam = None
+        if familia:
+            fam = _family_get(interaction.guild_id, familia)
+            if not fam:
+                return await interaction.response.send_message('❌ Família não encontrada.', ephemeral=True)
+            where += ' AND family_slug = %s'
+            params.append(fam.slug)
+        params.append(int(limite))
+        rows = _pg_exec(f'''SELECT action, actor_name, target_name, family_name, details, created_at FROM {PG_TABLE_FAMILY_AUDIT} {where} ORDER BY created_at DESC LIMIT %s''', tuple(params), fetch=True) or []
+        if not rows:
+            return await interaction.response.send_message('📭 Nenhum registro encontrado.', ephemeral=True)
+        embed = discord.Embed(title='Histórico de famílias', color=0x2ecc71)
+        if fam:
+            embed.description = f'Família: **{fam.name}**'
+        for action_i, actor_name, target_name, family_name, details, created_at in rows:
+            line = f'**Ação:** `{action_i}`\n**Família:** {family_name or "-"}\n**Autor:** {actor_name or "-"}'
+            if target_name:
+                line += f'\n**Alvo:** {target_name}'
+            if details:
+                line += f'\n**Detalhes:** {details[:200]}'
+            embed.add_field(name=str(created_at), value=line[:1024], inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    try:
+        if guild_obj:
+            bot.tree.add_command(family_group, guild=guild_obj)
+        else:
+            bot.tree.add_command(family_group)
+    except Exception:
+        pass
 
     async def _family_on_ready_sync():
         try:
-            synced = await bot.tree.sync(guild=guild_obj)
-            print(f'[FAMILIAS V4] Slash commands sincronizados no servidor {SEU_ID_DO_SERVIDOR}: {len(synced)} comando(s)')
+            if postgres_family_init():
+                _pg_setup_family_tables()
+                migrated = _pg_migrate_legacy_json_if_needed()
+                print(f'[FAMILIAS PG] Sistema pronto. Migração executada: {migrated} família(s).')
+            if guild_obj:
+                synced = await bot.tree.sync(guild=guild_obj)
+            else:
+                synced = await bot.tree.sync()
+            print(f'[FAMILIAS PG] Slash commands sincronizados: {len(synced)}')
         except Exception as e:
-            print('[FAMILIAS V4] Falha ao sincronizar slash commands:', e)
+            print('[FAMILIAS PG] Falha ao inicializar/sincronizar:', e)
             traceback.print_exc()
 
     bot.add_listener(_family_on_ready_sync, 'on_ready')
 
+
 setup_family_system()
+
 
 # ==================== EVENTOS ====================
 @bot.event
@@ -2428,12 +1765,6 @@ async def on_message(message):
             return
         if not message.content and message.embeds:
             return
-
-        if message.guild:
-            try:
-                await postgres_save_member(message.author, message.guild)
-            except Exception:
-                traceback.print_exc()
 
         texto = message.content or ''
 
@@ -2507,16 +1838,6 @@ async def on_message(message):
 async def on_ready():
     print(f'[BOT] Logado como {bot.user} (id: {bot.user.id})')
     try:
-        ok = await postgres_init()
-        if ok:
-            total_users = await postgres_sync_all_guilds()
-            data = _family_db_load()
-            total_families = await postgres_sync_families_snapshot(data)
-            print(f'[POSTGRES] Sincronização inicial concluída: {total_users} usuário(s) e {total_families} família(s).')
-    except Exception as e:
-        print(f'[POSTGRES] Falha na inicialização/sincronização: {e}')
-        traceback.print_exc()
-    try:
         _load_reaction_rules()
         _ensure_default_rules_for_all_guilds()
     except Exception as e:
@@ -2526,23 +1847,6 @@ async def on_ready():
         for guild in bot.guilds:
             await audit_permission_status(guild)
     except Exception:
-        traceback.print_exc()
-
-@bot.event
-async def on_member_join(member):
-    try:
-        await postgres_save_member(member, member.guild)
-    except Exception as e:
-        print(f'[POSTGRES] Falha ao salvar membro no on_member_join: {e}')
-        traceback.print_exc()
-
-
-@bot.event
-async def on_member_update(before, after):
-    try:
-        await postgres_save_member(after, after.guild)
-    except Exception as e:
-        print(f'[POSTGRES] Falha ao salvar membro no on_member_update: {e}')
         traceback.print_exc()
 
 
