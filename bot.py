@@ -1428,11 +1428,11 @@ def _family_member_ids_set(guild_id: int, family_slug: str) -> set[int]:
 
 async def _family_restore_guild_from_postgres(guild: discord.Guild):
     if not guild:
-        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_added': 0}
+        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_adicionados': 0}
 
     families = _family_list(guild.id)
     if not families:
-        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_added': 0}
+        return {'families': 0, 'roles_created': 0, 'roles_assigned': 0, 'roles_removed': 0, 'leaders_adicionados': 0}
 
     roles_created = 0
     leaders_added = 0
