@@ -22,6 +22,8 @@ SEU_ID_DO_SERVIDOR = 1409292663752228960
 LOG_CHANNEL_ID = 1495200091974271209
 BAN_LOG_CHANNEL_ID = 1466542559730991164
 DONO_ID = 766709835701682208
+ROLE_TRIGGER_ID = 1466962136918917161
+ROLE_MIRROR_ID = 1496293891119513763
 ARQUIVO = 'familias.json'
 AUTORIZADOS_FILE = 'autorizados.json'
 REACTIONS_FILE = 'reactions_rules.json'
@@ -78,6 +80,56 @@ LOG_LINE_HEIGHT = 34
 LOG_LABEL_WIDTH = 220
 
 # ==================== HELPERS ====================
+# ==================== CARGOS VINCULADOS ====================
+
+def _member_has_role(member: discord.Member, role_id: int) -> bool:
+    return any(getattr(role, 'id', 0) == role_id for role in getattr(member, 'roles', []))
+
+
+async def _ensure_linked_role(member: discord.Member):
+    if not member or not member.guild:
+        return False, 'membro inválido'
+    trigger_role = member.guild.get_role(int(ROLE_TRIGGER_ID))
+    mirror_role = member.guild.get_role(int(ROLE_MIRROR_ID))
+    if trigger_role is None:
+        return False, 'cargo gatilho não encontrado'
+    if mirror_role is None:
+        return False, 'cargo espelho não encontrado'
+    if not _member_has_role(member, trigger_role.id):
+        return False, 'membro não possui o cargo gatilho'
+    if _member_has_role(member, mirror_role.id):
+        return False, 'membro já possui o cargo espelho'
+    bot_member = get_bot_member(member.guild)
+    if bot_member is None:
+        return False, 'bot não encontrado no servidor'
+    if not bot_member.guild_permissions.manage_roles:
+        return False, 'sem permissão Gerenciar Cargos'
+    if bot_member.top_role <= mirror_role:
+        return False, 'hierarquia insuficiente para dar o cargo espelho'
+    try:
+        await member.add_roles(mirror_role, reason=f'Cargo automático vinculado a {trigger_role.name}')
+        return True, 'cargo espelho atribuído automaticamente'
+    except discord.Forbidden:
+        return False, 'discord retornou Missing Permissions ao adicionar o cargo'
+    except Exception as e:
+        return False, f'falha ao adicionar cargo: {e}'
+
+
+async def _sync_linked_role_in_guild(guild: discord.Guild):
+    if not guild:
+        return 0
+    total = 0
+    trigger_role = guild.get_role(int(ROLE_TRIGGER_ID))
+    if trigger_role is None:
+        return 0
+    for member in guild.members:
+        if _member_has_role(member, trigger_role.id):
+            ok, _ = await _ensure_linked_role(member)
+            if ok:
+                total += 1
+    return total
+
+
 def _agora_brasil_str(fmt='%d/%m/%Y %H:%M'):
     return datetime.now(ZoneInfo('America/Sao_Paulo')).strftime(fmt)
 
@@ -1846,7 +1898,34 @@ async def on_ready():
     try:
         for guild in bot.guilds:
             await audit_permission_status(guild)
+            synced = await _sync_linked_role_in_guild(guild)
+            if synced:
+                print(f'[CARGOS VINCULADOS] {synced} membro(s) sincronizado(s) em {guild.name}.')
     except Exception:
+        traceback.print_exc()
+
+
+@bot.event
+async def on_member_update(before, after):
+    try:
+        had_trigger = _member_has_role(before, int(ROLE_TRIGGER_ID))
+        has_trigger = _member_has_role(after, int(ROLE_TRIGGER_ID))
+        if not had_trigger and has_trigger:
+            ok, reason = await _ensure_linked_role(after)
+            print(f'[CARGOS VINCULADOS] {after} -> {ok} | {reason}')
+    except Exception as e:
+        print(f'[CARGOS VINCULADOS] Erro no on_member_update: {e}')
+        traceback.print_exc()
+
+
+@bot.event
+async def on_member_join(member):
+    try:
+        if _member_has_role(member, int(ROLE_TRIGGER_ID)):
+            ok, reason = await _ensure_linked_role(member)
+            print(f'[CARGOS VINCULADOS] join {member} -> {ok} | {reason}')
+    except Exception as e:
+        print(f'[CARGOS VINCULADOS] Erro no on_member_join: {e}')
         traceback.print_exc()
 
 
